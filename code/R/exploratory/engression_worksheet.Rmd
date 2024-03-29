@@ -107,6 +107,7 @@ lines(Ytest_range, xhatEngression, col = rgb(1, 0, 0, alpha = 0.7), lwd=3)
 ```
 
 ```{r}
+# test for independence of residuals and regressors
 res_XY <- xhatEngression - Xtest
 cor(Ytest, res_XY)
 ```
