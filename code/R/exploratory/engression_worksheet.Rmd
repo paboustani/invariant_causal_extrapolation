@@ -12,16 +12,19 @@ knitr::opts_chunk$set(echo = TRUE)
 ## R Markdown
 
 # install packages
+
 ```{r}
 install.packages("engression")
 ```
 
-# load libraries 
+# load libraries
+
 ```{r}
 library(engression) ## load engression package
 ```
 
 # simulate data
+
 ```{r}
 ######
 n = 1000; p=1 ## n samples and p dimensional covariate 
@@ -31,7 +34,6 @@ Y = X %*% beta + rnorm(n) ## linear model
 plot(X[,1],Y)
 ```
 
-
 ```{r}
 # test data are slightly shifted
 Xtest = matrix(1 + rnorm(n*p), ncol=p)
@@ -39,7 +41,8 @@ Ytest = Xtest %*% beta + rnorm(n)
 plot(Xtest[,1], Ytest)
 ```
 
-# run engression 
+# run engression
+
 ```{r}
 # fit an engression model for Y~X
 engression_YX = engression(X, Y) 
@@ -54,7 +57,6 @@ mean((yhatEngression - Ytest)^2)
 # quantile_pred <- predict(engressionFit, Xtest, type="quantile", 
 #        quantiles=c(0.1, 0.5, 0.9))
 ```
-
 
 ```{r}
 # Plot the original data points
@@ -72,6 +74,7 @@ cor(Xtest, res_YX)
 ```{r}
 engression_XY = engression(Y,X)
 ```
+
 ```{r}
 # predict on test data 
 Ytest_range <- seq(min(Ytest),max(Ytest),length.out=200)
@@ -79,10 +82,6 @@ xhatEngression = predict(engression_XY, Ytest_range)
 xhat_quantile <- predict(engression_XY, Ytest_range, type="quantile", 
   quantiles=c(0.05, 0.95))
 ```
-
-
-
-
 
 ```{r}
 # create Plot 
@@ -112,3 +111,6 @@ res_XY <- xhatEngression - Xtest
 cor(Ytest, res_XY)
 ```
 
+```{r}
+# i add this line of code, lets see what happens 
+```
