@@ -1,0 +1,112 @@
+---
+title: "engression_worksheet"
+author: "Philip Boustani"
+date: "2024-03-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+# install packages
+```{r}
+install.packages("engression")
+```
+
+# load libraries 
+```{r}
+library(engression) ## load engression package
+```
+
+# simulate data
+```{r}
+######
+n = 1000; p=1 ## n samples and p dimensional covariate 
+beta = 4+rnorm(p) ## random regression coefficients 
+X = matrix(rnorm(n*p), ncol=p) ## design matrix 
+Y = X %*% beta + rnorm(n) ## linear model
+plot(X[,1],Y)
+```
+
+
+```{r}
+Xtest = matrix(1 + rnorm(n*p), ncol=p) ## test data are slightly shifted
+Ytest = Xtest %*% beta + rnorm(n)
+plot(Xtest[,1], Ytest)
+```
+
+# run engression 
+```{r}
+# fit an engression model for Y~X
+engression_YX = engression(X, Y) 
+
+# predict on test data 
+yhatEngression = predict(engression_YX, Xtest) 
+
+# evaluate conditional mean prediction on test data
+mean((yhatEngression - Ytest)^2) 
+
+# quantile prediction with the same engression object 
+# quantile_pred <- predict(engressionFit, Xtest, type="quantile", 
+#        quantiles=c(0.1, 0.5, 0.9))
+```
+
+
+```{r}
+# Plot the original data points
+plot(Xtest[,1], Ytest)
+
+# Add the points of yhatRegression to the plot in red
+points(Xtest[,1], yhatEngression, col = "red")
+```
+
+```{r}
+res_YX <- yhatEngression - Ytest
+cor(Xtest, res_YX)
+```
+
+```{r}
+engression_XY = engression(Y,X)
+```
+```{r}
+# predict on test data 
+Ytest_range <- seq(min(Ytest),max(Ytest),length.out=200)
+xhatEngression = predict(engression_XY, Ytest_range)
+xhat_quantile <- predict(engression_XY, Ytest_range, type="quantile", 
+  quantiles=c(0.05, 0.95))
+```
+
+
+
+
+
+```{r}
+# create Plot 
+plot(Ytest, Xtest[,1], type = 'n')
+
+
+# plot the confidence interval 
+polygon(c(rev(Ytest_range), Ytest_range), 
+        c(rev(xhat_quantile[,2]), xhat_quantile[,1]), 
+        col = rgb(1, 0, 0, alpha = 0.4), 
+        border = NA
+      )
+
+
+# Plot the original data points
+points(Ytest, Xtest[,1], col = rgb(0, 0, 0, alpha = 0.4), pch = 16)
+
+
+# add mean preditcion
+lines(Ytest_range, xhatEngression, col = rgb(1, 0, 0, alpha = 0.7), lwd=3)
+
+```
+
+```{r}
+res_XY <- xhatEngression - Xtest
+cor(Ytest, res_XY)
+```
+
