@@ -33,7 +33,8 @@ plot(X[,1],Y)
 
 
 ```{r}
-Xtest = matrix(1 + rnorm(n*p), ncol=p) ## test data are slightly shifted
+# test data are slightly shifted
+Xtest = matrix(1 + rnorm(n*p), ncol=p)
 Ytest = Xtest %*% beta + rnorm(n)
 plot(Xtest[,1], Ytest)
 ```
