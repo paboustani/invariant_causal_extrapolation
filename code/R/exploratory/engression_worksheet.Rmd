@@ -5,11 +5,11 @@ date: "2024-03-24"
 output: html_document
 ---
 
+# Setup Rmarkdown
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
-
-## R Markdown
 
 # install packages
 
@@ -111,6 +111,61 @@ res_XY <- xhatEngression - Xtest
 cor(Ytest, res_XY)
 ```
 
+
+
+# Simulate heteroscedastic data
+
 ```{r}
-# i add this line of code, lets see what happens 
+n <- 10^2
+m <- 4
+X <- runif(n, 0,m)
+
+Y <- rnorm(n,mean=3*X,sd=(X-0.5*m)^2)
+
+hs_eng = engression(X,Y)
 ```
+
+
+```{r}
+X_range <- seq(min(X),max(X),length.out=200)
+Yhat_eng = predict(hs_eng, X_range)
+Yhat_quantile <- predict(hs_eng, X_range, type="quantile", 
+  quantiles=c(0.05, 0.95))
+Yhat_median <- predict(hs_eng, X_range, type="quantile", 
+  quantiles=c(0.5))
+
+
+# create Plot 
+plot(X, Y, type = 'n')
+
+
+# plot the confidence interval 
+polygon(c(rev(X_range), X_range), 
+        c(rev(Yhat_quantile[,2]), Yhat_quantile[,1]), 
+        col = rgb(1, 0, 0, alpha = 0.4), 
+        border = NA
+      )
+
+
+# Plot the original data points
+points(X, Y, col = rgb(0, 0, 0, alpha = 0.4), pch = 16)
+
+
+# add mean prediction
+lines(X_range, Yhat_eng, col = rgb(1, 0, 0, alpha = 0.7), lwd=3)
+
+# add median prediction
+lines(X_range, Yhat_median, col = rgb(0, 1, 0, alpha = 0.7), lwd=3)
+```
+
+
+
+
+
+
+
+
+
+
+
+
