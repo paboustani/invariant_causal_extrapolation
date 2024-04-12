@@ -15,6 +15,8 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r}
 install.packages("engression")
+
+install.packages("sn") # for skewed normals
 ```
 
 # load libraries
@@ -116,48 +118,64 @@ cor(Ytest, res_XY)
 # Simulate heteroscedastic data
 
 ```{r}
-n <- 10^2
-m <- 4
+# for skewed normals
+library(sn)
+```
+
+
+```{r}
+n <- 10^4
+m <- 4 # for the max value of X 
 X <- runif(n, 0,m)
 
-Y <- rnorm(n,mean=3*X,sd=(X-0.5*m)^2)
+# Y <- rnorm(n,mean=3*X,sd=(X-0.5*m)^2)
+Y <- rsn(n=n, xi=3*X, omega=-(X-0.5*m)^2+4, alpha=100, tau=0, dp=NULL)
+Y <- as.vector(Y)
 
 hs_eng = engression(X,Y)
 ```
 
 
 ```{r}
+# predict mean and quantiles 
 X_range <- seq(min(X),max(X),length.out=200)
 Yhat_eng = predict(hs_eng, X_range)
 Yhat_quantile <- predict(hs_eng, X_range, type="quantile", 
-  quantiles=c(0.05, 0.95))
-Yhat_median <- predict(hs_eng, X_range, type="quantile", 
-  quantiles=c(0.5))
+                         quantiles=c(0.05,0.2,0.5,0.8, 0.95)
+                         )
+# Yhat_median <- predict(hs_eng, X_range, type="quantile", 
+#   quantiles=c(0.5))
+```
 
 
+```{r}
 # create Plot 
 plot(X, Y, type = 'n')
+
+# Plot the original data points
+plot_sample <- rbinom(n,1,0.2)
+points(X[plot_sample==1], Y[plot_sample==1], col = rgb(0, 0, 0, alpha = 0.4), pch = 16)
 
 
 # plot the confidence interval 
 polygon(c(rev(X_range), X_range), 
-        c(rev(Yhat_quantile[,2]), Yhat_quantile[,1]), 
+        c(rev(Yhat_quantile[,5]), Yhat_quantile[,1]), 
         col = rgb(1, 0, 0, alpha = 0.4), 
         border = NA
       )
 
-
-# Plot the original data points
-points(X, Y, col = rgb(0, 0, 0, alpha = 0.4), pch = 16)
-
+polygon(c(rev(X_range), X_range), 
+        c(rev(Yhat_quantile[,4]), Yhat_quantile[,2]), 
+        col = rgb(1, 0, 0, alpha = 0.6), 
+        border = NA
+      )
 
 # add mean prediction
-lines(X_range, Yhat_eng, col = rgb(1, 0, 0, alpha = 0.7), lwd=3)
+lines(X_range, Yhat_eng, col = rgb(0, 0, 1, alpha = 0.7), lwd=3)
 
 # add median prediction
-lines(X_range, Yhat_median, col = rgb(0, 1, 0, alpha = 0.7), lwd=3)
+lines(X_range, Yhat_quantile[,3], col = rgb(0, 1, 0, alpha = 0.7), lwd=3)
 ```
-
 
 
 
