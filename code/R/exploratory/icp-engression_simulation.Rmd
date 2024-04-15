@@ -1,0 +1,397 @@
+---
+title: "engression_worksheet"
+author: "Philip Boustani"
+date: "2024-03-24"
+output: html_document
+---
+
+# Setup Rmarkdown
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# install and loed packages
+
+```{r}
+# List of required packages
+packages <- c(
+  "engression",
+  "sn", # for simulating skewed normals
+  "CondIndTests"
+)
+
+# First, installing packages which are not yet installed and then loading all of them
+for (pkg in packages) {
+  if(!require(pkg, character.only = TRUE)){
+    install.packages(pkg, character.only = TRUE);
+    library(pkg, character.only = TRUE)
+  }
+}
+```
+
+
+# Define the DAG
+
+```{r}
+# Define the DAG
+dag <- list(
+  Z_1 = character(0),
+  Z_2 = "Z_1",
+  Z_3 = c("Z_1", "Z_2"),
+  Z_4 = "Z_3",
+  Z_5 = character(0),
+  Z_6 = c("Z_3", "Z_4", "Z_5")
+)
+
+# coeff_signs list
+coeff_signs <- list(
+  Z_1 = "NA",
+  Z_2 = "+",
+  Z_3 = c("+", "-"),
+  Z_4 = "-",
+  Z_5 = "NA",
+  Z_6 = c("+", "-", "+")
+)
+```
+
+# Functions to print parents, children, ancestors and descendants of a node in a DAG
+
+```{r}
+# Function to return parents of a node in a DAG
+get_parents <- function(node, dag) {
+  parents <- dag[[node]]  # Get parents of the node
+  return(parents)
+}
+
+# Function to find ancestors of a node in a DAG
+find_ancestors <- function(node, dag) {
+  ancestors <- character(0)  # Initialize an empty vector to store ancestors
+  
+  # Helper function to recursively find ancestors
+  find_ancestors_recursive <- function(node, dag, ancestors) {
+    # Find parents of the current node
+    parents <- dag[[node]]
+    
+    # If the node has no parents, return the current ancestors
+    if (is.null(parents) || length(parents) == 0) {
+      return(ancestors)
+    }
+    
+    # Iterate through parents and add them to ancestors
+    for (parent in parents) {
+      if (!(parent %in% ancestors)) {
+        ancestors <- c(ancestors, parent)
+        # Recursively find ancestors of the parent
+        ancestors <- find_ancestors_recursive(parent, dag, ancestors)
+      }
+    }
+    return(ancestors)
+  }
+  
+  # Call the recursive function to find ancestors
+  ancestors <- find_ancestors_recursive(node, dag, ancestors)
+  
+  return(ancestors)
+}
+
+# Function to find descendants of a node in a DAG
+find_descendants <- function(node, dag) {
+  descendants <- character(0)  # Initialize an empty vector to store descendants
+  
+  # Helper function to recursively find descendants
+  find_descendants_recursive <- function(node, dag, descendants) {
+    # Find children of the current node
+    children <- names(dag)[sapply(dag, function(x) node %in% x)]
+    
+    # If the node has no children, return the current descendants
+    if (length(children) == 0) {
+      return(descendants)
+    }
+    
+    # Iterate through children and add them to descendants
+    for (child in children) {
+      if (!(child %in% descendants)) {
+        descendants <- c(descendants, child)
+        # Recursively find descendants of the child
+        descendants <- find_descendants_recursive(child, dag, descendants)
+      }
+    }
+    return(descendants)
+  }
+  
+  # Call the recursive function to find descendants
+  descendants <- find_descendants_recursive(node, dag, descendants)
+  
+  return(descendants)
+}
+
+# Function to find children of a node in a DAG
+find_children <- function(node, dag) {
+  children <- character(0)  # Initialize an empty vector to store children
+  
+  # Find children of the node
+  children <- names(dag)[sapply(dag, function(x) node %in% x)]
+  
+  return(children)
+}
+
+# Function to print the coefficients of the parents of a node in a DAG
+get_coeff <- function(node, coeffs){
+  return(coeffs[[node]])
+}
+```
+
+
+```{r}
+# Test the function
+parents_Z3 <- get_parents("Z_3", dag)
+print(parents_Z3)
+
+# Test the function
+ancestors_Z6 <- find_ancestors("Z_2", dag)
+print(ancestors_Z6)
+
+# Test the function
+descendants_Z3 <- find_descendants("Z_3", dag)
+print(descendants_Z3)
+
+# Test the function
+children_Z3 <- find_children("Z_2", dag)
+print(children_Z3)
+
+# Test the function
+get_coeff("Z_2", coeff_signs)
+```
+
+# Multiplicative or additive effects
+
+```{r}
+# Function to simulate data from the DAG
+g_k <- function(parents, coeff_signs, id, multiplic) {
+  # Convert coefficient signs to numeric values (+1 for "+" and -1 for "-")
+  coeff_values <- ifelse(coeff_signs == "+", 1, -1)
+  
+  # apply coefficients
+  parents <- t(t(parents)*coeff_values)
+  
+  # apply 
+  parents <- matrix(f(parents, id),dim(parents)[1],dim(parents)[2])
+  
+  if (multiplic == TRUE) {
+    # Calculate product of parental variables
+    data_value <- apply(parents, 1, prod)
+  } else {
+    # Calculate sum of parental variables
+    data_value <- rowSums(parents)
+  }
+  
+  return(data_value)
+}
+```
+
+# Shift- or do-Interventions
+
+```{r}
+interviene <- function(target, epsilon){
+  shift <- sample(c(TRUE, FALSE),1)
+  
+  if(shift==TRUE){
+    # shift-interventions
+    target <- target + epsilon
+  }else{
+    # do-interventions
+    target <- epsilon
+  }
+  return(target)
+}
+```
+
+# Tail behavior of the noise
+
+```{r}
+gen_eta <- function(n){
+  noise <- rt(n = n, df = sample(c(2, 3, 5, 10, 20, 50, 100), 1))
+  return(noise)
+}
+```
+
+
+# Strength of interventions
+
+```{r}
+gen_epsilon <- function(n){
+  epsilon <- rt(n = n, df = sample(c(0, 0.1, 0.2, 0.5, 1, 2, 5, 10), 1))
+  v <- sample(c(0, 0.1, 0.2, 0.5, 1, 2, 5, 10), 2, replace = TRUE)
+  meanshift <- v[1]
+  strength <- v[2]
+  epsilon <- strength*(epsilon + meanshift)
+}
+```
+
+# Non-linearities
+
+```{r}
+f <- function(x, id) {
+  if (id == 1) {
+    return(x)
+  } else if (id == 2) {
+    return(pmax(0, x))
+  } else if (id == 3) {
+    return(sign(x) * sqrt(abs(x)))
+  } else {
+    return(sin(2 * pi * x))
+  }
+}
+```
+
+
+# Location of interventions
+
+```{r}
+int_loc <- function(target,dag,interv){
+  
+  location <- character(0)
+  
+  if (interv=="all"){
+    # all ancestors and descendants
+    location <- names(dag)[names(dag) != target]
+    
+  } else if (interv=="rand"){
+    # one of the ancestors at random
+    ancestors <- c(find_ancestors(node = target,dag = dag))
+    
+    if (length(ancestors) == 0){
+      location <- character(0)
+    } else{
+      location <- sample(ancestors,1)
+    }
+    
+    # on of the descendants at random
+    descendants <- c(find_descendants(node = target,dag = dag))
+    
+    if (length(descendants) == 0){
+      location <- append(location, character(0))
+    } else{
+      location <- append(location, sample(descendants,1))
+    }
+    
+  } else {
+    # one of the parents at random
+    parents <- c(get_parents(node = target,dag = dag))
+    
+    if (length(parents) == 0){
+      location <- character(0)
+    } else{
+      location <- sample(parents,1)
+    }
+    
+    # on of the children at random
+    children <- c(find_children(node = target,dag = dag))
+    
+    if (length(children) == 0){
+      location <- append(location, character(0))
+    } else{
+      location <- append(location, sample(children,1))
+    }
+  }
+  
+  return(location)
+}
+```
+
+
+# simulate data
+
+```{r}
+# Sample size
+n_vec <- c(100, 200, 500, 2000, 5000)
+n <- 20 # n_vec[1]
+d <- 6
+
+# Target variable
+target <- paste("Z", sample(1:d, 1), sep = "_") 
+
+# Multiplicative or additive effects
+multiplic <- sample(c("product", "sum"), 1)
+
+# Non-linearities
+id <- sample(c(1, 2, 3, 4), 1)
+
+# Location of interventions
+E <- sample(1:3,1)
+interv <- sample(c("all", "rand", "close"),1)
+```
+
+
+# simulate data without intevention
+
+```{r}
+sim_data <- function(n, d, dag, coeff_signs, target, f_id, multiplic, E, interv){
+  
+  if (E==1) {
+    X <- matrix(NA,nrow = n, ncol = d)
+    colnames(X) <- paste("Z", 1:d, sep = "_")
+    
+    for (k in 1:d) {
+      parents <- get_parents(paste("Z", k, sep = "_"), dag)
+      if(length(parents) == 0) {
+        X[,k] <- gen_eta(n)
+      }else{
+        X[,k] <- g_k(parents = X[,parents], 
+                     coeff_signs = get_coeff(node = paste("Z", k, sep = "_"),
+                                             coeffs = coeff_signs ),
+                     id = f_id, multiplic = multiplic) + gen_eta(n)
+      }
+    }
+  } else {
+    location <- int_loc(target = target, dag = dag, interv = interv)
+    
+    X <- matrix(NA,nrow = n, ncol = d)
+    colnames(X) <- paste("Z", 1:d, sep = "_")
+    
+    for (k in 1:d) {
+      Zvar <- paste("Z", k, sep = "_")
+      
+      parents <- get_parents(Zvar, dag)
+      
+      if (length(parents) == 0) {
+        X[,k] <- gen_eta(n)
+        
+        if (Zvar %in% location){
+          epsilon <- gen_epsilon(n)
+          X[,k] <- interviene(target = X[,k], epsilon = epsilon)
+          
+        }
+      } else {
+        X[,k] <- g_k(parents = X[,parents], 
+                     coeff_signs = get_coeff(node = Zvar, coeffs = coeff_signs),
+                     id = f_id, multiplic = multiplic) + gen_eta(n)
+        
+        if (Zvar %in% location){
+          epsilon <- gen_epsilon(n)
+          X[,k] <- interviene(target = X[,k], epsilon = epsilon)
+          
+        }
+      }
+        
+    }
+  }
+  return(X)
+}
+```
+
+
+
+```{r}
+sim_data(n, d, dag, coeff_signs, target, f_id = id, multiplic, E, interv)
+```
+
+
+
+
+
+
+
+
+
