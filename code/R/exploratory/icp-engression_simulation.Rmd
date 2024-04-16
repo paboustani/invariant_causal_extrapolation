@@ -30,10 +30,12 @@ for (pkg in packages) {
 }
 ```
 
-
 # Define the DAG
 
 ```{r}
+# number of nodes
+d <- 6
+
 # Define the DAG
 dag <- list(
   Z_1 = character(0),
@@ -45,7 +47,7 @@ dag <- list(
 )
 
 # coeff_signs list
-coeff_signs <- list(
+dag_signs <- list(
   Z_1 = "NA",
   Z_2 = "+",
   Z_3 = c("+", "-"),
@@ -143,27 +145,6 @@ get_coeff <- function(node, coeffs){
 ```
 
 
-```{r}
-# Test the function
-parents_Z3 <- get_parents("Z_3", dag)
-print(parents_Z3)
-
-# Test the function
-ancestors_Z6 <- find_ancestors("Z_2", dag)
-print(ancestors_Z6)
-
-# Test the function
-descendants_Z3 <- find_descendants("Z_3", dag)
-print(descendants_Z3)
-
-# Test the function
-children_Z3 <- find_children("Z_2", dag)
-print(children_Z3)
-
-# Test the function
-get_coeff("Z_2", coeff_signs)
-```
-
 # Multiplicative or additive effects
 
 ```{r}
@@ -172,34 +153,36 @@ g_k <- function(parents, coeff_signs, id, multiplic) {
   # Convert coefficient signs to numeric values (+1 for "+" and -1 for "-")
   coeff_values <- ifelse(coeff_signs == "+", 1, -1)
   
-  # apply coefficients
-  parents <- t(t(parents)*coeff_values)
-  
-  # apply 
-  parents <- matrix(f(parents, id),dim(parents)[1],dim(parents)[2])
-  
-  if (multiplic == TRUE) {
-    # Calculate product of parental variables
-    data_value <- apply(parents, 1, prod)
+  # apply coefficients, function f_id and multiplication
+  if (length(coeff_values) == 1){
+    parents <- parents * coeff_values
+    data_value <- f(parents, id)
   } else {
-    # Calculate sum of parental variables
-    data_value <- rowSums(parents)
+    parents <- parents %*% diag(coeff_values)
+    parents <- matrix(data = f(parents, id), nrow = dim(parents)[1], ncol = dim(parents)[2])
+    
+    if (multiplic == TRUE) {
+      # Calculate product of parental variables
+      data_value <- apply(parents, 1, prod)
+    } else {
+      # Calculate sum of parental variables
+      data_value <- rowSums(parents)
+    }
   }
   
   return(data_value)
 }
 ```
 
+
 # Shift- or do-Interventions
 
 ```{r}
-interviene <- function(target, epsilon){
-  shift <- sample(c(TRUE, FALSE),1)
-  
+interviene <- function(target, shift, epsilon){
   if(shift==TRUE){
     # shift-interventions
     target <- target + epsilon
-  }else{
+  } else {
     # do-interventions
     target <- epsilon
   }
@@ -210,8 +193,8 @@ interviene <- function(target, epsilon){
 # Tail behavior of the noise
 
 ```{r}
-gen_eta <- function(n){
-  noise <- rt(n = n, df = sample(c(2, 3, 5, 10, 20, 50, 100), 1))
+gen_eta <- function(n, eta_df){
+  noise <- rt(n = n, df = eta_df)
   return(noise)
 }
 ```
@@ -220,12 +203,10 @@ gen_eta <- function(n){
 # Strength of interventions
 
 ```{r}
-gen_epsilon <- function(n){
-  epsilon <- rt(n = n, df = sample(c(0, 0.1, 0.2, 0.5, 1, 2, 5, 10), 1))
-  v <- sample(c(0, 0.1, 0.2, 0.5, 1, 2, 5, 10), 2, replace = TRUE)
-  meanshift <- v[1]
-  strength <- v[2]
+gen_epsilon <- function(n, epsilon_df, meanshift, strength){
+  epsilon <- rt(n = n, df = epsilon_df)
   epsilon <- strength*(epsilon + meanshift)
+  return(epsilon)
 }
 ```
 
@@ -301,94 +282,195 @@ int_loc <- function(target,dag,interv){
 ```
 
 
-# simulate data
+# simulate data (with and without intevention)
 
 ```{r}
-# Sample size
-n <- 20 # sample(c(100, 200, 500, 2000, 5000), 1)
-d <- 6
-
-# Target variable
-target <- paste("Z", sample(1:d, 1), sep = "_") 
-
-# Multiplicative or additive effects
-multiplic <- sample(c("product", "sum"), 1)
-
-# Non-linearities
-id <- sample(c(1, 2, 3, 4), 1)
-
-# Location of interventions
-E <- sample(1:3,1)
-interv <- sample(c("all", "rand", "close"),1)
-```
-
-
-# simulate data without intevention
-
-```{r}
-sim_data <- function(n, d, dag, coeff_signs, target, f_id, multiplic, E, interv){
+sim_data <- function(n, d, dag, coeff_signs, target, eta_df, f_id, multiplic, 
+                     E, shift, interv, epsilon_df, meanshift, strength, verbose = FALSE) {
   
-  if (E==1) {
-    X <- matrix(NA,nrow = n, ncol = d)
-    colnames(X) <- paste("Z", 1:d, sep = "_")
+  if (verbose) cat("Entironment is set to E =", E, "\n")
+  doc <- c(n,E)
+  
+  X <- matrix(NA, nrow = n, ncol = d+1)
+  X[,d+1] <- rep(E,n)
+  colnames(X) <- c(paste("Z", 1:d, sep = "_"),"E")
+  if (verbose) print(X)
+  
+  if (E == 1) {
+    doc <- append(doc, rep(FALSE, d))
+    if (verbose) cat("Simulating without Interventions. \n")
     
     for (k in 1:d) {
-      parents <- get_parents(paste("Z", k, sep = "_"), dag)
+      node <- paste("Z", k, sep = "_")
+      if (verbose) cat("\n Starting simulating node =", node, "\n")
+      parents <- get_parents(node, dag)
+      if (verbose) cat("Parents =", parents, "\n")
+      
       if(length(parents) == 0) {
-        X[,k] <- gen_eta(n)
-      }else{
-        X[,k] <- g_k(parents = X[,parents], 
-                     coeff_signs = get_coeff(node = paste("Z", k, sep = "_"),
-                                             coeffs = coeff_signs ),
-                     id = f_id, multiplic = multiplic) + gen_eta(n)
+        X[,k] <- gen_eta(n, eta_df)
+        if (verbose) cat("No parents, generated eta. \n")
+        if (verbose) print(X)
+        
+      } else {
+        signs <- get_coeff(node = node, coeffs = coeff_signs)
+        if (verbose) cat("Parental signs =", signs, "\n")
+        
+        X[,k] <- g_k(parents = X[,parents], coeff_signs = signs,
+                     id = f_id, multiplic = multiplic) + gen_eta(n, eta_df)
+        if (verbose) cat("There are parents and added eta. \n")
+        if (verbose) print(X)
+        
       }
     }
   } else {
-    location <- int_loc(target = target, dag = dag, interv = interv)
+    if (verbose) cat("Simulating with Interventions. \n")
     
-    X <- matrix(NA,nrow = n, ncol = d)
-    colnames(X) <- paste("Z", 1:d, sep = "_")
+    location <- int_loc(target = target, dag = dag, interv = interv)
+    if (verbose) cat("Interviening on location(s) =", location, "\n")
     
     for (k in 1:d) {
-      Zvar <- paste("Z", k, sep = "_")
-      
-      parents <- get_parents(Zvar, dag)
+      doc <- append(doc, FALSE)
+      node <- paste("Z", k, sep = "_")
+      if (verbose) cat("\n Simulating node =", node, "\n")
+      parents <- get_parents(node, dag)
+      if (verbose) cat("parents =", parents, "\n")
       
       if (length(parents) == 0) {
-        X[,k] <- gen_eta(n)
+        X[,k] <- gen_eta(n, eta_df)
+        if (verbose) cat("No parents; generated eta. \n")
+        if (verbose) print(X)
         
-        if (Zvar %in% location){
-          epsilon <- gen_epsilon(n)
-          X[,k] <- interviene(target = X[,k], epsilon = epsilon)
+        if (node %in% location){
+          doc[2+k] <- TRUE
+          epsilon <- gen_epsilon(n, epsilon_df, meanshift, strength)
+          if (verbose) print(epsilon)
+          X[,k] <- interviene(target = X[,k], shift = shift, epsilon = epsilon)
+          if (verbose) cat("No parents and node is in interventions; added interviened via epsilon. \n")
+          if (verbose) print(X)
           
         }
       } else {
-        X[,k] <- g_k(parents = X[,parents], 
-                     coeff_signs = get_coeff(node = Zvar, coeffs = coeff_signs),
-                     id = f_id, multiplic = multiplic) + gen_eta(n)
+        signs <- get_coeff(node = node, coeffs = coeff_signs)
+        if (verbose) cat("parental signs =", signs, "\n")
         
-        if (Zvar %in% location){
-          epsilon <- gen_epsilon(n)
-          X[,k] <- interviene(target = X[,k], epsilon = epsilon)
+        X[,k] <- g_k(parents = X[,parents], 
+                     coeff_signs = signs,
+                     id = f_id, multiplic = multiplic) + gen_eta(n, eta_df)
+        if (verbose) cat("There are parents; generated transform plus eta. \n")
+        if (verbose) print(X)
+        
+        if (node %in% location){
+          doc[2+k] <- TRUE
+          epsilon <- gen_epsilon(n, epsilon_df, meanshift, strength)
+          if (verbose) print(epsilon)
+          X[,k] <- interviene(target = X[,k], shift = shift, epsilon = epsilon)
+          if (verbose) cat("Node is in interventions; interviened via epsilon. \n")
+          if (verbose) print(X)
           
         }
       }
-        
     }
   }
-  return(X)
+  return(list(sample = X, documentation = doc))
 }
 ```
 
 
+# Testing functions
 
 ```{r}
-sim_data(n, d, dag, coeff_signs, target, f_id = id, multiplic, E, interv)
+# Test the function
+parents_Z3 <- get_parents("Z_3", dag)
+print(parents_Z3)
+
+# Test the function
+ancestors_Z6 <- find_ancestors("Z_2", dag)
+print(ancestors_Z6)
+
+# Test the function
+descendants_Z3 <- find_descendants("Z_3", dag)
+print(descendants_Z3)
+
+# Test the function
+children_Z3 <- find_children("Z_2", dag)
+print(children_Z3)
+
+# Test the function
+get_coeff("Z_2", coeffs =  dag_signs)
 ```
 
+# simulate data
 
+```{r}
+gen_sample <- function(n, d, dag, signs, verbose = FALSE){
+  # Target variable
+  target <- paste("Z", sample(1:d, 1), sep = "_") 
+  
+  # Tail behavior of the noise
+  eta_df <- sample(c(2, 3, 5, 10, 20, 50, 100), 1)
+  
+  # Multiplicative or additive effects
+  multiplic <- sample(c("product", "sum"), 1)
+  
+  # Shift- or do-Interventions
+  shift <- sample(c(TRUE, FALSE),1)
+  
+  # Strength of interventions
+  epsilon_df <- sample(c(2, 3, 5, 10, 20, 50, 100), 1)
+  meanshift <- sample(c(0, 0.1, 0.2, 0.5, 1, 2, 5, 10), 1)
+  strength <- sample(c(0, 0.1, 0.2, 0.5, 1, 2, 5, 10), 1)
+  
+  # Non-linearities
+  id <- sample(c(1, 2, 3, 4), 1)
+  
+  # Location of interventions
+  n_vec <- sample(1:n, 1)
+  n_vec <- append(n_vec, sample(1:(n-n_vec), 1))
+  n_vec <- append(n_vec, n - sum(n_vec))
+  
+  output <- list(sample = numeric(0), documentation = character(0))
+  
+  for (E in 1:3){
+    interv <- sample(c("all", "rand", "close"), 1)
+  
+    # sample from dag
+    out <- sim_data(n_vec[E], d, dag, coeff_signs = signs, target, eta_df, f_id = id, 
+             multiplic, E, shift, interv, epsilon_df, meanshift, strength, 
+             verbose = verbose)
+    
+    output$sample <- rbind(output$sample, out$sample)
+    if (E==1) {
+      output$documentation <- rbind(output$documentation,c(out$documentation,"None"))
+    } else {
+      output$documentation <- rbind(output$documentation,c(out$documentation,interv))
+    }
+  }
+  
+  # generate ID
+  ID <- paste(sample(letters, 1), sample(10^5:10^6, 1), sep = "-")
+  
+  # output$sample <- cbind(output$sample, rep(ID,n))
+  output$documentation <- cbind(rep(ID,3), output$documentation)
+  
+  # create documentation 
+  stats <- c(ID, target, eta_df, multiplic, shift, epsilon_df, meanshift, strength, id)
+  names(stats) <- c("ID", "target", "eta_df", "multiplic", "shift", "epsilon_df", 
+                  "meanshift", "strength", "F_id")
+  colnames(output$documentation) <- c("ID", "N", "E", "Z1_int", "Z2_int", "Z3_int", 
+                                      "Z4_int", "Z5_int", "Z6_int", "interv")
+  
+  return(list(sample = output$sample,statistics = stats, documentation = output$documentation))
+}
+```
 
+# run code 
 
+```{r}
+n <- sample(c(100, 200, 500, 2000, 5000),1)
+S1 <- gen_sample(n = n, d = d, dag = dag, signs = dag_signs, verbose = FALSE)
+S1$statistics
+S1$documentation
+```
 
 
 
