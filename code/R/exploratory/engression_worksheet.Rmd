@@ -14,15 +14,19 @@ knitr::opts_chunk$set(echo = TRUE)
 # install packages
 
 ```{r}
-install.packages("engression")
+# List of required packages
+packages <- c(
+  "engression",
+  "sn", # for simulating skewed normals
+)
 
-install.packages("sn") # for skewed normals
-```
-
-# load libraries
-
-```{r}
-library(engression) ## load engression package
+# First, installing packages which are not yet installed and then loading all of them
+for (pkg in packages) {
+  if(!require(pkg, character.only = TRUE)){
+    install.packages(pkg, character.only = TRUE);
+    library(pkg, character.only = TRUE)
+  }
+}
 ```
 
 # simulate data
