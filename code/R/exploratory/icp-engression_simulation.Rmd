@@ -36,42 +36,24 @@ for (pkg in packages) {
 # load all required source files
 
 ```{r}
-# Version 1: self-written
-
 # List of required source files
 files <- c(
-  "nonlinearICPsimulation.R",
-  "external_modified/InvResDisTest.R",
-  "external_modified/gamResidualDistributions.R",
-  "external_modified/getgam.R",
-  "external_modified/ksResidualDistributions.R",
-  "external_modified/leveneAndWilcoxResidualDistributions.R",
-  "engressionResidualDistributions.R",
-  "external_modified/computeDefiningSets.R",
-  "getICPsets.R"
 )
-# Detect working directory and load all files 
-directory <- getwd()
-paths <- file.path(directory, files)
-for (path in paths) {
-  source(path)
-}
-```
 
-
-```{r}
-# Version 2: embedded into nonlinear ICP
-
-files <- c(
-  "nonlinearICPsimulation.R"#, 
-  # "engressionResidualDistributions.R",
-  # list.files("nonlinearICP_modified/CondIndTests", full.names = TRUE),
-  # list.files("nonlinearICP_modified/nonlinearICP", full.names = TRUE)
+# if applicable, specify entire folders to be loaded
+folders <- c(
+  "engression_supplementary",
+  "external_modified"
 )
 
 # Detect working directory and load all files 
 directory <- getwd()
-paths <- file.path(directory, files)
+
+paths <- c(
+  file.path(directory, files),
+  file.path(directory, list.files(folders, full.names = TRUE))
+)
+
 for (path in paths) {
   source(path)
 }
@@ -82,8 +64,10 @@ for (path in paths) {
 # Invariant residual distribution test for nonlinear ICP
 
 ```{r}
-n <- 5000 # sample(c(100, 200, 500, 2000, 5000),1);  cat("n =", n, "\n")
-Sim <- gen_sample(n = n, d = d, dag = dag, signs = dag_signs, target = "random", verbose = FALSE)
+n <- 500 # \in (100, 200, 500, 2000, 5000)
+Sim <- gen_sample(n = n, d = d, dag = dag, 
+                  signs = dag_signs, target = "Z_4", 
+                  verbose = FALSE )
 
 target <- Sim$statistics[2]; cat("target =", target, "\n")
 parents <- get_parents(target,dag = dag); cat("parents =", parents, "\n")
@@ -102,7 +86,7 @@ for (k in 1:length(S_sets)) {
   pvals[k] <- InvResDisTest(
     Y = Sim$sample[,target], E = as.factor(Sim$sample[,"E"]), X = Sim$sample[,S_k], 
     alpha = 0.05,
-    verbose = FALSE, fitmodel = "GAM",
+    verbose = FALSE, fitmodel = "engression",
     test = leveneAndWilcoxResidualDistributions, colNameNoSmooth = NULL,
     mtry = sqrt(NCOL(X)), ntree = 100, nodesize = 5, maxnodes = NULL,
     noise_dim = 5,
@@ -116,11 +100,19 @@ for (k in 1:length(S_sets)) {
 
 accepted_sets <- get_accepted(pvals, S_sets)
 union_set <- get_union(accepted_sets); cat("union_set =", union_set, "\n") 
-defining_set <- get_defining(accepted_sets, S_sets); cat("defining_set =", defining_set, "\n")
+defining_set <- get_defining(accepted_sets, S_sets); cat("defining_set: \n")
 defining_set
-intersection_set <- get_intersection(accepted_sets); cat("intersection_set =", intersection_set, "\n") 
+intersection_set <- get_intersection(accepted_sets); cat("intersection_set =", intersection_set, "\n")
+```
 
-setss <- nonlinearICP(X = Sim$sample[, !(colnames(Sim$sample) %in% c(target, "E"))], 
+
+
+
+
+```{r}
+X <- Sim$sample[, !(colnames(Sim$sample) %in% c(target, "E"))] 
+
+setss <- nonlinearICP(X = X, 
                       Y = Sim$sample[,target], 
                       environment = as.factor(Sim$sample[,"E"]),
              condIndTest = InvariantResidualDistributionTest,
@@ -141,15 +133,83 @@ setss <- nonlinearICP(X = Sim$sample[, !(colnames(Sim$sample) %in% c(target, "E"
 setss$retrievedCausalVars
 setss$acceptedSets
 setss$definingSets
+increment_nodes(target, as.vector(setss$definingSets[[1]]))
 summary(setss)
+```
+
+```{r}
+increment_nodes <- function(target, var_list) {
+  # Extract the node number from the target
+  node <- as.numeric(gsub("\\D", "", target))
+  
+  # Increment numbers in var_list if they are equal to or larger than node
+  result <- sapply(var_list, function(x) {
+    if (is.numeric(x)) {
+      if (x >= node) {
+        return(paste0("Z_", x + 1))
+      } else {
+        return(paste0("Z_", x))
+      }
+    } else {
+      return(x)
+    }
+  })
+  
+  return(result)
+}
 ```
 
 
 ```{r}
-plot(x = Sim$sample[,intersection_set], y = Sim$sample[,target], type = 'n')
+# Fit GAM and Engression on simulated data
+Y <- Sim$sample[,target]
+X <- Sim$sample[,defining_set]
+E <- Sim$sample[,"E"]
+  
+gamfit <- gam(Y ~ s(X))
+Yhat_gam <- gamfit$fitted.values
 
-# Plot the original data points
-points(Sim$sample[,intersection_set], Sim$sample[,target],
-       col = rgb(Sim$sample[,"E"]==1, Sim$sample[,"E"]==2, Sim$sample[,"E"]==3, alpha = 0.4), pch = 16)
+engfit <- engression(
+    X,
+    Y,
+    noise_dim = 5,
+    hidden_dim = 100,
+    num_layer = 3,
+    dropout = 0.05,
+    batch_norm = TRUE,
+    num_epochs = 50,
+    lr = 10^(-3),
+    beta = 1,
+    silent = TRUE,
+    standardize = TRUE
+)
+
+Yhat_eng <- predict(engfit, X)
 ```
+
+
+```{r}
+# Plot the Fits
+regressor <- "Z_2"
+plot(x = Sim$sample[,regressor], y = Sim$sample[,target], type = 'n')
+
+points(Sim$sample[,regressor], Sim$sample[,target],
+       col = rgb(Sim$sample[,"E"]==1, Sim$sample[,"E"]==2, Sim$sample[,"E"]==3, alpha = 0.4), pch = 16)
+points(Sim$sample[,regressor],Yhat_gam)
+points(Sim$sample[,regressor],Yhat_eng, pch = "+")
+```
+
+
+```{r}
+# Compute Kolmogorov-Smirnov test
+gamres <- Yhat_gam - Y
+engres <- Yhat_eng - Y
+ks.test(gamres[E==1],gamres[E!=1])
+ks.test(engres[E==1],engres[E!=1])
+```
+
+
+
+
+
 
