@@ -17,7 +17,7 @@ knitr::opts_chunk$set(echo = TRUE)
 # List of required packages
 packages <- c(
   "engression",
-  "sn", # for simulating skewed normals
+  "sn" # for simulating skewed normals
 )
 
 # First, installing packages which are not yet installed and then loading all of them
@@ -53,6 +53,18 @@ plot(Xtest[,1], Ytest)
 # fit an engression model for Y~X
 engression_YX = engression(X, Y) 
 
+# predict on training data 
+yhat = predict(engression_YX, Xtest)
+
+
+plot(Xtest, Ytest, col = rgb(0, 0, 0, alpha = 0.4), pch = 16)
+
+points(Xtest, yhat, col = rgb(1, 0, 0, alpha = 0.9), pch = 16)
+
+```
+
+
+```{r}
 # predict on test data 
 yhatEngression = predict(engression_YX, Xtest) 
 

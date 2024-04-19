@@ -10,6 +10,11 @@ InvResDisTest <- function(Y, E, X,
                           mtry = sqrt(NCOL(X)),
                           ntree = 100,
                           nodesize = 5,
+                          noise_dim = 5,
+                          hidden_dim = 100,
+                          num_layer = 3,
+                          num_epochs = 1000,
+                          silent = FALSE, 
                           maxnodes = NULL,
                           returnModel = FALSE){
 
@@ -34,9 +39,7 @@ InvResDisTest <- function(Y, E, X,
   } else if(fitmodel=="RF"){
     res <- rfResidualDistributions(X, Y, mtry, ntree, nodesize, maxnodes, returnModel)
   } else if(fitmodel=="engression"){
-    eng_obj <- engression(X, Y)$residuals
-    Yhat <- predict(eng_obj, X)
-    res <- Y - Yhat
+    res <- engressionResidualDistributions(X, Y, noise_dim, hidden_dim, num_layer, num_epochs, silent)
   } else {
     stop("Invalid model, pleas specify one of the following: GAM, RF, engression.")
   }

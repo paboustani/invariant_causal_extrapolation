@@ -20,7 +20,8 @@ packages <- c(
   "CondIndTests", 
   "lawstat", # For levene.test
   "stats", # For ks.test, wilcox.test
-  "mgcv" # for fitting GAMs
+  "mgcv", # for fitting GAMs
+  "nonlinearICP"
 )
 
 # First, installing packages which are not yet installed and then loading all of them
@@ -35,14 +36,37 @@ for (pkg in packages) {
 # load all required source files
 
 ```{r}
+# Version 1: self-written
+
 # List of required source files
 files <- c(
-  "nonlinearICPsimulation.R", 
-  "external_modified/InvResDisTest.R", 
+  "nonlinearICPsimulation.R",
+  "external_modified/InvResDisTest.R",
   "external_modified/gamResidualDistributions.R",
   "external_modified/getgam.R",
   "external_modified/ksResidualDistributions.R",
-  "external_modified/leveneAndWilcoxResidualDistributions.R"
+  "external_modified/leveneAndWilcoxResidualDistributions.R",
+  "engressionResidualDistributions.R",
+  "external_modified/computeDefiningSets.R",
+  "getICPsets.R"
+)
+# Detect working directory and load all files 
+directory <- getwd()
+paths <- file.path(directory, files)
+for (path in paths) {
+  source(path)
+}
+```
+
+
+```{r}
+# Version 2: embedded into nonlinear ICP
+
+files <- c(
+  "nonlinearICPsimulation.R"#, 
+  # "engressionResidualDistributions.R",
+  # list.files("nonlinearICP_modified/CondIndTests", full.names = TRUE),
+  # list.files("nonlinearICP_modified/nonlinearICP", full.names = TRUE)
 )
 
 # Detect working directory and load all files 
@@ -54,71 +78,25 @@ for (path in paths) {
 ```
 
 
-```{r}
-accepted_sets <- function(pvals, S_sets, alpha = 0.05) {
-  # Initialize an empty list to store the sets
-  selected_sets <- list()
-  
-  # Iterate through each element of pvals
-  for (i in seq_along(pvals)) {
-    # Check if the p-value is not smaller than 0.05
-    if (pvals[i] >= alpha) {
-      # Add the corresponding set/vector from S_sets to the list
-      selected_sets[[length(selected_sets) + 1]] <- S_sets[[i]]
-    }
-  }
-  
-  # Return the list of selected sets
-  return(selected_sets)
-}
-
-get_union <- function(selected_sets) {
-  # Initialize an empty set to store the union
-  union_set <- NULL
-  
-  # Iterate through each set in selected_sets and update the union
-  for (set in selected_sets) {
-    union_set <- union(union_set, set)
-  }
-  
-  # Return the union set
-  return(union_set)
-}
-
-get_intersection <- function(selected_sets) {
-  # Check if the selected_sets list is not empty
-  if (length(selected_sets) == 0) {
-    return(NULL)  # If the list is empty, return NULL
-  }
-  
-  # Initialize the intersection set with the first set in selected_sets
-  intersection_set <- selected_sets[[1]]
-  
-  # Iterate through each set in selected_sets and update the intersection
-  for (i in 2:length(selected_sets)) {
-    intersection_set <- intersect(intersection_set, selected_sets[[i]])
-  }
-  
-  # Return the intersection set
-  return(intersection_set)
-}
-```
-
 
 # Invariant residual distribution test for nonlinear ICP
 
 ```{r}
-n <- sample(c(100, 200, 500, 2000, 5000),1); n
-Sim <- gen_sample(n = n, d = d, dag = dag, signs = dag_signs, verbose = FALSE)
+n <- 5000 # sample(c(100, 200, 500, 2000, 5000),1);  cat("n =", n, "\n")
+Sim <- gen_sample(n = n, d = d, dag = dag, signs = dag_signs, target = "random", verbose = FALSE)
 
-target <- Sim$statistics[2]; target
-parents <- get_parents(target,dag = dag); parents
+target <- Sim$statistics[2]; cat("target =", target, "\n")
+parents <- get_parents(target,dag = dag); cat("parents =", parents, "\n")
+```
 
+
+```{r}
 S_sets <- obtain_S(target, d)
-
 pvals <- rep(NA, length(S_sets))
 
 for (k in 1:length(S_sets)) {
+  cat(round(k/length(S_sets)*100),"% : Computing set", k, "out of", length(S_sets), "\n")
+  
   S_k <- S_sets[[k]]
   
   pvals[k] <- InvResDisTest(
@@ -127,21 +105,51 @@ for (k in 1:length(S_sets)) {
     verbose = FALSE, fitmodel = "GAM",
     test = leveneAndWilcoxResidualDistributions, colNameNoSmooth = NULL,
     mtry = sqrt(NCOL(X)), ntree = 100, nodesize = 5, maxnodes = NULL,
+    noise_dim = 5,
+    hidden_dim = 100,
+    num_layer = 3,
+    num_epochs = 30, # default set to 1000
+    silent = TRUE, 
     returnModel = FALSE
   )$pvalue
 }
 
-selected_sets <- accepted_sets(pvals, S_sets)
-union_set <- get_union(selected_sets); union_set
-intersection_set <- get_intersection(selected_sets); intersection_set
-```
+accepted_sets <- get_accepted(pvals, S_sets)
+union_set <- get_union(accepted_sets); cat("union_set =", union_set, "\n") 
+defining_set <- get_defining(accepted_sets, S_sets); cat("defining_set =", defining_set, "\n")
+defining_set
+intersection_set <- get_intersection(accepted_sets); cat("intersection_set =", intersection_set, "\n") 
 
+setss <- nonlinearICP(X = Sim$sample[, !(colnames(Sim$sample) %in% c(target, "E"))], 
+                      Y = Sim$sample[,target], 
+                      environment = as.factor(Sim$sample[,"E"]),
+             condIndTest = InvariantResidualDistributionTest,
+             argsCondIndTest = NULL,
+             alpha=0.05,
+             varPreSelectionFunc = NULL,
+             argsVarPreSelectionFunc = NULL,
+             maxSizeSets = ncol(X),
+             condIndTestNames = NULL,
+             speedUp = FALSE,
+             subsampleSize = c(0.1, 0.25, 0.5, 0.75, 1),
+             retrieveDefiningsSets = TRUE,
+             seed = 1,
+             stopIfEmpty = TRUE,
+             testAdditionalSet = NULL,
+             verbose = FALSE)
+
+setss$retrievedCausalVars
+setss$acceptedSets
+setss$definingSets
+summary(setss)
+```
 
 
 ```{r}
-# plot(x = S1$sample[,c(1)], y = S1$sample[,2], type = 'n')
-# 
-# # Plot the original data points
-# points(S1$sample[,c(1)], S1$sample[,2], 
-#        col = rgb(S1$sample[, "E"]==1, S1$sample[, "E"]==2, S1$sample[, "E"]==3, alpha = 0.4), pch = 16)
+plot(x = Sim$sample[,intersection_set], y = Sim$sample[,target], type = 'n')
+
+# Plot the original data points
+points(Sim$sample[,intersection_set], Sim$sample[,target],
+       col = rgb(Sim$sample[,"E"]==1, Sim$sample[,"E"]==2, Sim$sample[,"E"]==3, alpha = 0.4), pch = 16)
 ```
+

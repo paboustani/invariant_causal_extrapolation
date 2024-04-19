@@ -338,9 +338,15 @@ sim_data <- function(n, d, dag, coeff_signs, target, eta_df, f_id, multiplic,
 }
 
 # simulate data
-gen_sample <- function(n, d, dag, signs, verbose = FALSE){
+gen_sample <- function(n, d, dag, signs, target = "random", verbose = FALSE){
+  
   # Target variable
-  target <- paste("Z", sample(1:d, 1), sep = "_") 
+  if (!target %in% paste("Z", 1:d, sep = "_")) {
+    if (target != "random") {
+      stop("Specify valid target.")
+    }
+    target <- paste("Z", sample(1:d, 1), sep = "_")
+  } 
   
   # Tail behavior of the noise
   eta_df <- sample(c(2, 3, 5, 10, 20, 50, 100), 1)
