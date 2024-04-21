@@ -395,9 +395,9 @@ gen_sample <- function(n, d, dag, signs, target = "random", verbose = FALSE){
   output$documentation <- cbind(rep(ID,3), output$documentation)
   
   # create documentation 
-  stats <- c(ID, target, eta_df, multiplic, shift, epsilon_df, meanshift, strength, id)
+  stats <- c(ID, target, eta_df, multiplic, shift, epsilon_df, meanshift, strength, id, n)
   names(stats) <- c("ID", "target", "eta_df", "multiplic", "shift", "epsilon_df", 
-                    "meanshift", "strength", "F_id")
+                    "meanshift", "strength", "F_id", "N")
   colnames(output$documentation) <- c("ID", "N", "E", "Z1_int", "Z2_int", "Z3_int", 
                                       "Z4_int", "Z5_int", "Z6_int", "interv")
   

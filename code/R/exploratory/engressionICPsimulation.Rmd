@@ -14,6 +14,18 @@ knitr::opts_chunk$set(echo = TRUE)
 # install and loed packages
 
 ```{r}
+# First, installing packages which are not yet installed and then loading all of them
+load_packages <- function(packages){
+  for (pkg in packages) {
+    if(!require(pkg, character.only = TRUE)){
+      install.packages(pkg, character.only = TRUE);
+      library(pkg, character.only = TRUE)
+    }
+  }
+}
+```
+
+```{r}
 # List of required packages
 packages <- c(
   "engression",
@@ -23,19 +35,31 @@ packages <- c(
   "mgcv", # for fitting GAMs
   "nonlinearICP",
   "readtext",
-  "utils"
+  "utils", # progress bar 
+  "foreach",
+  "doParallel"
 )
 
-# First, installing packages which are not yet installed and then loading all of them
-for (pkg in packages) {
-  if(!require(pkg, character.only = TRUE)){
-    install.packages(pkg, character.only = TRUE);
-    library(pkg, character.only = TRUE)
-  }
-}
+load_packages(packages)
 ```
 
 # load all required source files
+
+```{r}
+# Detect working directory and load all files 
+load_files <- function(files, folders){
+  directory <- getwd()
+  
+  paths <- c(
+    file.path(directory, files),
+    file.path(directory, list.files(folders, full.names = TRUE))
+  )
+  
+  for (path in paths) {
+    source(path)
+  }
+}
+```
 
 ```{r}
 # List of required source files
@@ -48,27 +72,30 @@ folders <- c(
   "external_modified"
 )
 
-# Detect working directory and load all files 
-directory <- getwd()
-
-paths <- c(
-  file.path(directory, files),
-  file.path(directory, list.files(folders, full.names = TRUE))
-)
-
-for (path in paths) {
-  source(path)
-}
+load_files(files, folders)
 ```
 
 
+```{r}
+# set up clusters
+cores <- detectCores(); cores 
+cluster <- makeCluster(cores[1]-1); cluster
+registerDoParallel(cluster)
+```
+
+```{r}
+report <- foreach(single_file=1:file_number, .errorhandling = 'pass', .combine=rbind) %dopar% { 
+}
+stopCluster(cluster)
+```
 
 # Invariant residual distribution test for nonlinear ICP
 
 ```{r}
-n <- 100 # \in (100, 200, 500, 2000, 5000)
+n <- 200 # \in (100, 200, 500, 2000, 5000)
 SimRep <- 100
 pb <- txtProgressBar(min = 0, max = SimRep, style = 3)
+method <- "engression"
 
 for (Sim in 1:SimRep){
   # cat(round(Sim/SimRep*100),"% is simulated. \n")
@@ -76,8 +103,6 @@ for (Sim in 1:SimRep){
 
   tryCatch({
     
-  
-  
   Simulation <- gen_sample(n = n, d = d, dag = dag, 
                   signs = dag_signs, target = "random", 
                   verbose = FALSE )
@@ -95,7 +120,7 @@ for (Sim in 1:SimRep){
       Y = Simulation$sample[,target], E = as.factor(Simulation$sample[,"E"]), 
       X = Simulation$sample[,S_k], 
       alpha = 0.05,
-      verbose = FALSE, fitmodel = "engression",
+      verbose = FALSE, fitmodel = method,
       test = leveneAndWilcoxResidualDistributions, colNameNoSmooth = NULL,
       mtry = sqrt(NCOL(X)), ntree = 100, nodesize = 5, maxnodes = NULL,
       noise_dim = 5,
@@ -107,21 +132,84 @@ for (Sim in 1:SimRep){
     )$pvalue
   }
   
-  record_stats( c(Simulation$statistics, 
+  record_stats( c(Simulation$statistics,
                   round(pvals,4)),
-               title = "SimulationReport_engression")
-  record_stats(Simulation$documentation, title = "InterventionDocumentation_engression")
+               title = paste("SimulationReport", method, sep = "_") )
+  record_stats(Simulation$documentation, 
+               title = paste("InterventionDocumentation_", method, sep = "_") )
   
   }, error = function(e) {
     record_stats( c(Simulation$statistics, 
                   conditionMessage(e)),
-               title = "ErrorReport_engression")
+               title =  paste("ErrorReport_", method, sep = "_") )
   }
   )
 }
 close(pb)
 
 ```
+
+
+```{r}
+n <- 500 # \in (100, 200, 500, 2000, 5000)
+SimRep <- 100
+pb <- txtProgressBar(min = 0, max = SimRep, style = 3)
+method <- "engression"
+
+for (Sim in 1:SimRep){
+  # cat(round(Sim/SimRep*100),"% is simulated. \n")
+  setTxtProgressBar(pb, Sim)
+
+  tryCatch({
+    
+  Simulation <- gen_sample(n = n, d = d, dag = dag, 
+                  signs = dag_signs, target = "random", 
+                  verbose = FALSE )
+  
+  target <- Simulation$statistics[2]
+  S_sets <- obtain_S(target, d)
+  pvals <- rep(NA, length(S_sets))
+  names(pvals) <- paste("pvSet",1:length(S_sets),sep = "_")
+  
+  for (k in 1:length(S_sets)) {
+    
+    S_k <- S_sets[[k]]
+    
+    pvals[k] <- InvResDisTest(
+      Y = Simulation$sample[,target], E = as.factor(Simulation$sample[,"E"]), 
+      X = Simulation$sample[,S_k], 
+      alpha = 0.05,
+      verbose = FALSE, fitmodel = method,
+      test = leveneAndWilcoxResidualDistributions, colNameNoSmooth = NULL,
+      mtry = sqrt(NCOL(X)), ntree = 100, nodesize = 5, maxnodes = NULL,
+      noise_dim = 5,
+      hidden_dim = 100,
+      num_layer = 3,
+      num_epochs = 30, # default set to 1000
+      silent = TRUE, 
+      returnModel = FALSE
+    )$pvalue
+  }
+  
+  record_stats( c(Simulation$statistics,
+                  round(pvals,4)),
+               title = paste("SimulationReport", method, sep = "_") )
+  record_stats(Simulation$documentation, 
+               title = paste("InterventionDocumentation_", method, sep = "_") )
+  
+  }, error = function(e) {
+    record_stats( c(Simulation$statistics, 
+                  conditionMessage(e)),
+               title =  paste("ErrorReport_", method, sep = "_") )
+  }
+  )
+}
+close(pb)
+
+```
+
+
+
 
 
 
