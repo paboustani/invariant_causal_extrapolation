@@ -1,5 +1,5 @@
 ---
-title: "engression_worksheet"
+title: "Engression for ICP: Data simulation"
 author: "Philip Boustani"
 date: "2024-03-24"
 output: html_document
@@ -14,6 +14,20 @@ knitr::opts_chunk$set(echo = TRUE)
 # install and loed packages
 
 ```{r}
+# List of required packages
+packages <- c(
+  "engression",
+  "CondIndTests", # used in the InvResDisTest function
+  "lawstat", # for levene.test
+  "stats", # for ks.test, wilcox.test
+  "mgcv", # for fitting GAMs
+  # "nonlinearICP",
+  "readtext", # loading csv files
+  # "utils", # progress bar 
+  "foreach", # for loops with parallel processing
+  "doSNOW"  # parallel processing with progress bar 
+) # note: otherwise "doParallel" is an option for parallel processing as well 
+
 # First, installing packages which are not yet installed and then loading all of them
 load_packages <- function(packages){
   for (pkg in packages) {
@@ -23,43 +37,12 @@ load_packages <- function(packages){
     }
   }
 }
-```
 
-```{r}
-# List of required packages
-packages <- c(
-  "engression",
-  "CondIndTests", 
-  "lawstat", # For levene.test
-  "stats", # For ks.test, wilcox.test
-  "mgcv", # for fitting GAMs
-  "nonlinearICP",
-  "readtext",
-  "utils", # progress bar 
-  "foreach",
-  "doParallel"
-)
-
+# loading packages
 load_packages(packages)
 ```
 
 # load all required source files
-
-```{r}
-# Detect working directory and load all files 
-load_files <- function(files, folders){
-  directory <- getwd()
-  
-  paths <- c(
-    file.path(directory, files),
-    file.path(directory, list.files(folders, full.names = TRUE))
-  )
-  
-  for (path in paths) {
-    source(path)
-  }
-}
-```
 
 ```{r}
 # List of required source files
@@ -72,295 +55,108 @@ folders <- c(
   "external_modified"
 )
 
-load_files(files, folders)
-```
-
-
-```{r}
-# set up clusters
-cores <- detectCores(); cores 
-cluster <- makeCluster(cores[1]-1); cluster
-registerDoParallel(cluster)
-```
-
-```{r}
-report <- foreach(single_file=1:file_number, .errorhandling = 'pass', .combine=rbind) %dopar% { 
+# Detect working directory and load all files 
+load_files <- function(files, folders, directory){
+  
+  paths <- c(
+    file.path(directory, files),
+    file.path(directory, list.files(folders, full.names = TRUE))
+  )
+  
+  for (path in paths) {
+    source(path)
+  }
 }
-stopCluster(cluster)
+
+# loading directory  
+directory <- getwd()
+load_files(files, folders, directory)
 ```
+
 
 # Invariant residual distribution test for nonlinear ICP
 
 ```{r}
-n <- 200 # \in (100, 200, 500, 2000, 5000)
+n <- 5000 # for $n \in {100, 200, 500, 2000, 5000}$ 
 SimRep <- 100
-pb <- txtProgressBar(min = 0, max = SimRep, style = 3)
 method <- "engression"
 
-for (Sim in 1:SimRep){
-  # cat(round(Sim/SimRep*100),"% is simulated. \n")
-  setTxtProgressBar(pb, Sim)
+# setting up parallel processing
+cores <- 4 # detectCores()
+cluster <- makeSOCKcluster(cores[1]-1)
+registerDoSNOW(cluster)
 
-  tryCatch({
+# setting up progress bar
+pb <- txtProgressBar(max=SimRep, style=3)
+progress <- function(n) setTxtProgressBar(pb, n)
+opts <- list(progress=progress)
+
+# Starting parallel processing unit
+foreach(Sim = 1:SimRep, 
+        .errorhandling = 'pass', 
+        .combine=rbind, 
+        .options.snow = opts # for including the progress bar
+) %dopar% { 
+                    
+  load_packages(packages) # loading all packages into cores
+  load_files(files, folders, directory) # loading source files into cores
+  
+  # Setting up framework for error message printing
+  tryCatch(
+    {
+      
+    # Simulating data from DAG
+    Simulation <- gen_sample(n = n, d = d, dag = dag, 
+                    signs = dag_signs, target = "random", 
+                    verbose = FALSE )
     
-  Simulation <- gen_sample(n = n, d = d, dag = dag, 
-                  signs = dag_signs, target = "random", 
-                  verbose = FALSE )
-  
-  target <- Simulation$statistics[2]
-  S_sets <- obtain_S(target, d)
-  pvals <- rep(NA, length(S_sets))
-  names(pvals) <- paste("pvSet",1:length(S_sets),sep = "_")
-  
-  for (k in 1:length(S_sets)) {
+    target <- Simulation$statistics[2]
+    S_sets <- obtain_S(target, d)
+    pvals <- rep(NA, length(S_sets))
+    names(pvals) <- paste("pvSet",1:length(S_sets),sep = "_")
     
-    S_k <- S_sets[[k]]
-    
-    pvals[k] <- InvResDisTest(
-      Y = Simulation$sample[,target], E = as.factor(Simulation$sample[,"E"]), 
-      X = Simulation$sample[,S_k], 
-      alpha = 0.05,
-      verbose = FALSE, fitmodel = method,
-      test = leveneAndWilcoxResidualDistributions, colNameNoSmooth = NULL,
-      mtry = sqrt(NCOL(X)), ntree = 100, nodesize = 5, maxnodes = NULL,
-      noise_dim = 5,
-      hidden_dim = 100,
-      num_layer = 3,
-      num_epochs = 30, # default set to 1000
-      silent = TRUE, 
-      returnModel = FALSE
-    )$pvalue
-  }
-  
-  record_stats( c(Simulation$statistics,
-                  round(pvals,4)),
-               title = paste("SimulationReport", method, sep = "_") )
-  record_stats(Simulation$documentation, 
-               title = paste("InterventionDocumentation_", method, sep = "_") )
-  
-  }, error = function(e) {
-    record_stats( c(Simulation$statistics, 
-                  conditionMessage(e)),
-               title =  paste("ErrorReport_", method, sep = "_") )
-  }
-  )
-}
-close(pb)
-
-```
-
-
-```{r}
-n <- 500 # \in (100, 200, 500, 2000, 5000)
-SimRep <- 100
-pb <- txtProgressBar(min = 0, max = SimRep, style = 3)
-method <- "engression"
-
-for (Sim in 1:SimRep){
-  # cat(round(Sim/SimRep*100),"% is simulated. \n")
-  setTxtProgressBar(pb, Sim)
-
-  tryCatch({
-    
-  Simulation <- gen_sample(n = n, d = d, dag = dag, 
-                  signs = dag_signs, target = "random", 
-                  verbose = FALSE )
-  
-  target <- Simulation$statistics[2]
-  S_sets <- obtain_S(target, d)
-  pvals <- rep(NA, length(S_sets))
-  names(pvals) <- paste("pvSet",1:length(S_sets),sep = "_")
-  
-  for (k in 1:length(S_sets)) {
-    
-    S_k <- S_sets[[k]]
-    
-    pvals[k] <- InvResDisTest(
-      Y = Simulation$sample[,target], E = as.factor(Simulation$sample[,"E"]), 
-      X = Simulation$sample[,S_k], 
-      alpha = 0.05,
-      verbose = FALSE, fitmodel = method,
-      test = leveneAndWilcoxResidualDistributions, colNameNoSmooth = NULL,
-      mtry = sqrt(NCOL(X)), ntree = 100, nodesize = 5, maxnodes = NULL,
-      noise_dim = 5,
-      hidden_dim = 100,
-      num_layer = 3,
-      num_epochs = 30, # default set to 1000
-      silent = TRUE, 
-      returnModel = FALSE
-    )$pvalue
-  }
-  
-  record_stats( c(Simulation$statistics,
-                  round(pvals,4)),
-               title = paste("SimulationReport", method, sep = "_") )
-  record_stats(Simulation$documentation, 
-               title = paste("InterventionDocumentation_", method, sep = "_") )
-  
-  }, error = function(e) {
-    record_stats( c(Simulation$statistics, 
-                  conditionMessage(e)),
-               title =  paste("ErrorReport_", method, sep = "_") )
-  }
-  )
-}
-close(pb)
-
-```
-
-
-
-
-
-
-```{r}
-S_sets <- obtain_S(target, d)
-pvals <- rep(NA, length(S_sets))
-
-for (k in 1:length(S_sets)) {
-  cat(round(k/length(S_sets)*100),"% : Computing set", k, "out of", length(S_sets), "\n")
-  
-  S_k <- S_sets[[k]]
-  
-  pvals[k] <- InvResDisTest(
-    Y = Sim$sample[,target], E = as.factor(Sim$sample[,"E"]), X = Sim$sample[,S_k], 
-    alpha = 0.05,
-    verbose = FALSE, fitmodel = "engression",
-    test = leveneAndWilcoxResidualDistributions, colNameNoSmooth = NULL,
-    mtry = sqrt(NCOL(X)), ntree = 100, nodesize = 5, maxnodes = NULL,
-    noise_dim = 5,
-    hidden_dim = 100,
-    num_layer = 3,
-    num_epochs = 30, # default set to 1000
-    silent = TRUE, 
-    returnModel = FALSE
-  )$pvalue
-}
-
-# compute defining sets
-defining_set <- get_defining(accepted_sets, S_sets)
-defSet_dummy <- grepl(paste(defining_set, collapse = "|"), paste("Z", 1:d, sep = "_"))
-if (length(defining_set) == 0)  defSet_dummy <- rep(FALSE, d)
-names(defSet_dummy) <- paste("defSet", 1:6, sep = "_")
-
-# compute intersection sets
-intersection_set <- get_intersection(accepted_sets)
-intSet_dummy <- grepl(paste(intersection_set, collapse = "|"), paste("Z", 1:d, sep = "_"))
-if (length(intersection_set) == 0)  intSet_dummy <- rep(FALSE, d)
-names(intSet_dummy) <- paste("intSet", 1:6, sep = "_")
-
-accepted_sets <- get_accepted(pvals, S_sets)
-union_set <- get_union(accepted_sets); cat("union_set =", union_set, "\n") 
-defining_set <- get_defining(accepted_sets, S_sets); cat("defining_set: \n")
-defining_set
-intersection_set <- get_intersection(accepted_sets); cat("intersection_set =", intersection_set, "\n")
-```
-
-
-
-
-
-```{r}
-X <- Simulation$sample[, !(colnames(Simulation$sample) %in% c(target, "E"))] 
-
-setss <- nonlinearICP(X = X, 
-                      Y = Simulation$sample[,target], 
-                      environment = as.factor(Simulation$sample[,"E"]),
-             condIndTest = InvariantResidualDistributionTest,
-             argsCondIndTest = NULL,
-             alpha=0.05,
-             varPreSelectionFunc = NULL,
-             argsVarPreSelectionFunc = NULL,
-             maxSizeSets = ncol(X),
-             condIndTestNames = NULL,
-             speedUp = FALSE,
-             subsampleSize = c(0.1, 0.25, 0.5, 0.75, 1),
-             retrieveDefiningsSets = TRUE,
-             seed = 1,
-             stopIfEmpty = TRUE,
-             testAdditionalSet = NULL,
-             verbose = FALSE)
-
-setss$retrievedCausalVars
-setss$acceptedSets
-setss$definingSets
-increment_nodes(target, as.vector(setss$definingSets[[1]]))
-summary(setss)
-```
-
-```{r}
-increment_nodes <- function(target, var_list) {
-  # Extract the node number from the target
-  node <- as.numeric(gsub("\\D", "", target))
-  
-  # Increment numbers in var_list if they are equal to or larger than node
-  result <- sapply(var_list, function(x) {
-    if (is.numeric(x)) {
-      if (x >= node) {
-        return(paste0("Z_", x + 1))
-      } else {
-        return(paste0("Z_", x))
-      }
-    } else {
-      return(x)
+    # obtain p-values for a possible sets of ancestors 
+    for (k in 1:length(S_sets)) {
+      
+      S_k <- S_sets[[k]]
+      
+      pvals[k] <- InvResDisTest(
+        Y = Simulation$sample[,target], E = as.factor(Simulation$sample[,"E"]), 
+        X = Simulation$sample[,S_k], 
+        alpha = 0.05,
+        verbose = FALSE, fitmodel = method,
+        test = leveneAndWilcoxResidualDistributions, colNameNoSmooth = NULL,
+        mtry = sqrt(NCOL(X)), ntree = 100, nodesize = 5, maxnodes = NULL,
+        noise_dim = 5,
+        hidden_dim = 100,
+        num_layer = 3,
+        num_epochs = 30, # default set to 1000
+        silent = TRUE, 
+        returnModel = FALSE
+      )$pvalue
     }
-  })
-  
-  return(result)
+    
+    # record Simulation Statistics
+    record_stats( c(Simulation$statistics,
+                    round(pvals,4)),
+                 title = paste("SimulationReport", method, sep = "_") )
+    # record intervention location
+    record_stats(Simulation$documentation, 
+                 title = paste("InterventionDocumentation", method, sep = "_") )
+
+    }, error = function(e) { 
+      
+      # printing error if occurred
+      record_stats( c(Simulation$statistics, 
+                    conditionMessage(e)),
+                 title =  paste("ErrorReport", method, sep = "_") )
+    
+    } 
+  ) # ending tryCatch
 }
+
+close(pb)
+stopCluster(cluster)
 ```
-
-
-```{r}
-# Fit GAM and Engression on simulated data
-Y <- Sim$sample[,target]
-X <- Sim$sample[,defining_set]
-E <- Sim$sample[,"E"]
-  
-gamfit <- gam(Y ~ s(X))
-Yhat_gam <- gamfit$fitted.values
-
-engfit <- engression(
-    X,
-    Y,
-    noise_dim = 5,
-    hidden_dim = 100,
-    num_layer = 3,
-    dropout = 0.05,
-    batch_norm = TRUE,
-    num_epochs = 50,
-    lr = 10^(-3),
-    beta = 1,
-    silent = TRUE,
-    standardize = TRUE
-)
-
-Yhat_eng <- predict(engfit, X)
-```
-
-
-```{r}
-# Plot the Fits
-regressor <- "Z_2"
-plot(x = Sim$sample[,regressor], y = Sim$sample[,target], type = 'n')
-
-points(Sim$sample[,regressor], Sim$sample[,target],
-       col = rgb(Sim$sample[,"E"]==1, Sim$sample[,"E"]==2, Sim$sample[,"E"]==3, alpha = 0.4), pch = 16)
-points(Sim$sample[,regressor],Yhat_gam)
-points(Sim$sample[,regressor],Yhat_eng, pch = "+")
-```
-
-
-```{r}
-# Compute Kolmogorov-Smirnov test
-gamres <- Yhat_gam - Y
-engres <- Yhat_eng - Y
-ks.test(gamres[E==1],gamres[E!=1])
-ks.test(engres[E==1],engres[E!=1])
-```
-
-
-
-
 
 
