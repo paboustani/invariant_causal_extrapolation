@@ -74,8 +74,345 @@ directory <- getwd()
 load_files(files, folders, directory)
 ```
 
+
+
+# PART 1 :
+# Comput Jaccard similarity
+
+```{r}
+convertSetToNumeric <- function(accepted_sets){
+  # Initialize a list to store the modified sets
+  numeric_sets <- list()
+  
+  # Loop through each entry in accepted_sets
+  for (i in seq_along(accepted_sets)) {
+    # Remove "Z_" from each element in the current set and convert to numeric
+    numeric_sets[[i]] <- as.numeric(sub("Z_", "", accepted_sets[[i]]))
+  }
+  
+  return(numeric_sets)
+}
+
+convertSetToCharacter <- function(numeric_sets){
+  # Initialize a list to store the modified sets
+  set_sets <- list()
+  
+  # Loop through each entry in numeric_sets
+  for (i in seq_along(numeric_sets)) {
+    # Add "Z_" to each element in the current numeric set and convert to character
+    set_sets[[i]] <- paste0("Z_", as.character(numeric_sets[[i]]))
+  }
+  return(set_sets)
+}
+
+is_subset <- function(sets, parents){
+  isSubsets <- sapply(def_set, function(x) 
+    if (length(x) == 0) {return(FALSE)} else {
+    all(x %in% unlist(parents)) } )
+  return(isSubsets)
+}
+```
+
+```{r}
+directory <- getwd()
+method <- "GAM"
+title <- paste("SimulationReport", method, sep = "_")
+impdir = directory
+fileform = "csv"
+delim = ";"
+filename <- paste(impdir, "/", title, ".", fileform, sep = "")
+statistics <- read.csv(filename, header = TRUE, sep = delim, encoding="UTF-8")
+pvals <- statistics[ , grepl("pvSet_" , names( statistics ) ) ]
+
+nvec <- dim(pvals)[1]
+AbsIntSetVec <- numeric(nvec)
+AbsUnSetVec <- numeric(nvec)
+sInParents <- numeric(nvec)
+intInParents <- numeric(nvec)
+
+for (Sim in 1:nvec) {
+  target <- statistics[Sim,"target"]
+  S_sets <- obtain_S(target, d)
+  parents <- get_parents(target,dag = dag)
+  
+  accepted_sets <- get_accepted(pvals[Sim,], S_sets)
+  accepted_sets <- convertSetToNumeric(accepted_sets)
+  parents_no <- convertSetToNumeric(list(parents))
+    
+  def_set <- computeDefiningSets(accepted_sets)
+  int_set <- computeSetIntersection(accepted_sets)
+  
+  AppndSets <- append(parents_no, def_set)
+  AbsIntSetVec[Sim] <- length( computeSetIntersection(AppndSets) )
+  AbsUnSetVec[Sim] <- length( get_union(AppndSets) )
+  
+  allSub <- is_subset(def_set,parents_no)
+  if (length(allSub)==0) allSub <- 0 
+  sInParents[Sim] <- sum(allSub) == length(def_set)
+  
+  allSub <- is_subset(int_set,parents_no)
+  if (length(allSub)==0) allSub <- 0 
+  intInParents[Sim] <- sum(allSub) == length(int_set)
+}
+
+Jaccard <- AbsIntSetVec/ AbsUnSetVec
+statistics <- cbind(statistics, 
+                    "AbsIntSetVec" = AbsIntSetVec, 
+                    "AbsUnSetVec" = AbsUnSetVec, 
+                    "Jaccard" = Jaccard)
+mean(Jaccard, na.rm = TRUE)
+mean(1-intInParents)
+```
+
+
+# PART 2 :
+# Generating Extrapolation sample 
+
+```{r}
+Reps <- 10
+d_gran <- 10^3
+d_seq <- seq(1, 100, length.out= d_gran) # round(max(distTest)*1.1)
+MSEengMat <- MSEgamMat <- list()
+
+n <- 10^4
+E <- 1
+target <- "Z_3"
+quant <- 0.3
+regressors <- "all" # all, parents, descendants, ancestors
+
+
+target =  "Z_3"
+eta_df = 2 # $\in \{2, 3, 5, 10, 20, 50, 100\}
+f_id = 1 # $\in \{1, 2, 3, 4\} or {"softplus", "square", "cubic", "log"}
+multiplic = "product" # $\in \{"product", "sum"\}
+E = 1 # $\in \{1, 2, 3\}$
+shift = TRUE # $\in \{TRUE, FALSE\}$
+interv = "all" # $\in \{"all", "rand", "close"\}$
+epsilon_df = 2 # $\in \{2, 3, 5, 10, 20, 50, 100\}$
+meanshift = 0.1 # $\in \{0, 0.1, 0.2, 0.5, 1, 2, 5, 10\}
+strength = 0.1 # $\in \{0, 0.1, 0.2, 0.5, 1, 2, 5, 10\} 
+
+
+cluster <- makeSOCKcluster(3)
+registerDoSNOW(cluster)
+
+# setting up progress bar
+pb <- txtProgressBar(max=Reps, style=3)
+progress <- function(n) setTxtProgressBar(pb, n)
+opts <- list(progress=progress)
+
+# Starting parallel processing unit
+foreach(rep = 1:Reps,
+        .errorhandling = 'pass',
+        .combine=rbind,
+        .options.snow = opts # for including the progress bar
+) %dopar% {
+
+  load_packages(packages) # loading all packages into cores
+  load_files(files, folders, directory) # loading source files into cores
+  
+  # Setting up framework for error message printing
+
+# for (rep in 1:Reps){
+  tryCatch(
+    {
+  
+      Simulation <- sim_data(n, d = 6, dag = dag, coeff_signs = dag_signs, 
+               target = target, 
+               eta_df = eta_df, # $\in \{2, 3, 5, 10, 20, 50, 100\}
+               f_id = f_id, # $\in \{1, 2, 3, 4\} or {"softplus", "square", "cubic", "log"}
+               multiplic = multiplic, # $\in \{"product", "sum"\}
+               E = E, # $\in \{1, 2, 3\}$
+               shift = shift, # $\in \{TRUE, FALSE\}$
+               interv = interv, # $\in \{"all", "rand", "close"\}$
+               epsilon_df = epsilon_df, # $\in \{2, 3, 5, 10, 20, 50, 100\}$
+               meanshift = meanshift, # $\in \{0, 0.1, 0.2, 0.5, 1, 2, 5, 10\}
+               strength = strength, # $\in \{0, 0.1, 0.2, 0.5, 1, 2, 5, 10\} 
+               verbose = FALSE)
+      
+      data <- as.data.frame(Simulation$sample)
+      
+      perc40 <- quantile(data$Z_1, quant)
+      data$test <- as.numeric(data$"Z_1" > perc40)
+      
+      trainData <- data[data$test==0,]
+      testData <- data[data$test==1,]
+      
+      # choose regressors 
+      if (regressors == "all"){
+        Zvars <- grep("^Z_", names(data), value = TRUE)
+        Xvars <- Zvars[!Zvars %in% c(target)] # all variables
+      } else if (regressors == "parents"){
+        Xvars <- paretns <- get_parents(target, dag = dag) # parents
+      } else if (regressors == "descendants"){
+        Xvars <- descendants <- find_descendants(node = target, dag = dag) # descendants
+      } else if (regressors == "ancestors"){
+        Xvars <- ancestors <- find_ancestors(node = target, dag = dag) # ancestors
+      } else {
+        stop("No valid regressors specified.")
+      }
+        
+      engFit <- engression(
+        X = trainData[,Xvars],
+        Y = trainData[,target],
+        noise_dim = 5,
+        hidden_dim = 100,
+        num_layer = 3,
+        dropout = 0.05,
+        batch_norm = TRUE,
+        num_epochs = 50,
+        lr = 10^(-3),
+        beta = 1,
+        silent = TRUE,
+        standardize = TRUE
+      )
+      
+      Yhat_eng <- predict(engFit, testData[,Xvars])
+      MSE_eng <- mean((Yhat_eng - testData[,target])^2) 
+      
+      Yhat_gam <- getgamPredictions(X = trainData[,Xvars], 
+                                    Y = trainData[,target], 
+                                    XTest = testData[,Xvars])
+      MSE_gam <- mean((Yhat_gam$predictions - testData[,target])^2)
+      
+      X <- as.matrix(trainData[, Xvars])
+      Y <- as.matrix(testData[, Xvars])
+      distTest <- apply(Y, 1, function(y) min(sqrt(rowSums((X - y)^2))))
+      
+      MSEengD <- numeric(d_gran)
+      MSEgamD <- numeric(d_gran)
+      
+      for (i in 1:d_gran) {
+        d_subset <- which(distTest<=d_seq[i])
+        MSEengD[i] <- mean((Yhat_eng[d_subset] - testData[d_subset,target])^2)
+        MSEgamD[i] <- mean((Yhat_gam$predictions[d_subset] - testData[d_subset,target])^2) 
+      }
+      
+      names(MSEengD) <- 1:length(MSEengD)
+      names(MSEgamD) <- 1:length(MSEgamD)
+      
+      stats <- c(n , target, quant, regressors, eta_df, f_id, multiplic, 
+                 E, shift, interv, epsilon_df, meanshift, strength)
+      names(stats) <- c("n" , "target", "quant", "regressors", "eta_df", "f_id", "multiplic", 
+                 "E", "shift", "interv", "epsilon_df", "meanshift", "strength")
+      
+      record_stats( c(stats, MSEengD),
+                 title = paste("ExtraplolationStorage", "eng", sep = "_") )
+      
+      record_stats( c(stats, MSEgamD),
+                 title = paste("ExtraplolationStorage", "GAM", sep = "_") )
+      
+      
+    }, error = function(e) { 
+      
+      # printing error if occurred
+      record_stats( c("Error"=conditionMessage(e)),
+                 title =  "ExtraplolationReport" )
+    
+    } 
+  ) # ending tryCatch
+}
+
+
+close(pb)
+stopCluster(cluster)
+```
+
+
+```{r}
+
+delim <- ";"
+MSEengMat <- read.csv(paste("ExtraplolationStorage", "eng.csv", sep = "_"), 
+                       header = TRUE, sep = delim, encoding="UTF-8")
+MSEgamMat <- read.csv(paste("ExtraplolationStorage", "GAM.csv", sep = "_"), 
+                       header = TRUE, sep = delim, encoding="UTF-8")
+
+maxval <- max(range(colMeans(MSEgamMat))[2], range(colMeans(MSEengMat))[2])
+plot(d_seq, colMeans(MSEgamMat), type = "l", ylim = c(0,maxval))
+points(d_seq, colMeans(MSEengMat), col = "red", type = "l")
+```
+
+
+```{r}
+plot(x = data$Z_4, y = data$Z_3, 
+     col = rgb(data$test==1, (1-data$test)==2, 0, alpha = 0.4), 
+     pch = 16)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+
+
+directory <- getwd()
+title <-"ExtraplolationStorage"
+impdir = directory
+fileform = "txt"
+filename <- paste(impdir, "/", title, ".", fileform, sep = "")
+# statistics <- read.csv(filename, header = TRUE, sep = delim, encoding="UTF-8")
+
+
+
+# Suppose myList is your list object
+myList <- list(a = 1:3, b = letters[1:3])
+
+# Open a connection to a text file for writing
+fileConn <- file(filename)
+
+# Write each element of the list as a line in the text file
+for (i in seq_along(myList)) {
+  writeLines(paste(names(myList)[i], toString(myList[[i]])), fileConn)
+}
+
+# Close the file connection
+close(fileConn)
+
+```
+
+
+
+```{r}
+# Open a connection to the text file for reading
+fileConn <- file(filename)
+
+# Initialize an empty list
+loadedList <- list()
+
+# Read each line from the text file and parse it to reconstruct the list
+while (length(line <- readLines(fileConn, n = 1)) > 0) {
+  elements <- strsplit(line, " ")[[1]]
+  loadedList[[elements[1]]] <- as.numeric(elements[-1])
+}
+
+# Close the file connection
+close(fileConn)
+
+# Now loadedList contains the list object loaded from the text file
+print(loadedList)
+
+```
+
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------- #
-# Archive for old Code 
+# Archive for old Code                                                         #
+# ---------------------------------------------------------------------------- #
 
 ```{r}
 n <- 100 # \in (100, 200, 500, 2000, 5000)
@@ -134,7 +471,6 @@ for (Sim in 1:SimRep){
 close(pb)
 ```
 
-
 ```{r}
 S_sets <- obtain_S(target, d)
 pvals <- rep(NA, length(S_sets))
@@ -179,10 +515,6 @@ defining_set <- get_defining(accepted_sets, S_sets); cat("defining_set: \n")
 defining_set
 intersection_set <- get_intersection(accepted_sets); cat("intersection_set =", intersection_set, "\n")
 ```
-
-
-
-
 
 ```{r}
 X <- Simulation$sample[, !(colnames(Simulation$sample) %in% c(target, "E"))] 
@@ -234,7 +566,6 @@ increment_nodes <- function(target, var_list) {
 }
 ```
 
-
 ```{r}
 # Fit GAM and Engression on simulated data
 Y <- Sim$sample[,target]
@@ -262,7 +593,6 @@ engfit <- engression(
 Yhat_eng <- predict(engfit, X)
 ```
 
-
 ```{r}
 # Plot the Fits
 regressor <- "Z_2"
@@ -272,171 +602,5 @@ points(Sim$sample[,regressor], Sim$sample[,target],
        col = rgb(Sim$sample[,"E"]==1, Sim$sample[,"E"]==2, Sim$sample[,"E"]==3, alpha = 0.4), pch = 16)
 points(Sim$sample[,regressor],Yhat_gam)
 points(Sim$sample[,regressor],Yhat_eng, pch = "+")
-```
-
-
-# Comput Jaccard similarity
-
-```{r}
-convertSetToNumeric <- function(accepted_sets){
-  # Initialize a list to store the modified sets
-  numeric_sets <- list()
-  
-  # Loop through each entry in accepted_sets
-  for (i in seq_along(accepted_sets)) {
-    # Remove "Z_" from each element in the current set and convert to numeric
-    numeric_sets[[i]] <- as.numeric(sub("Z_", "", accepted_sets[[i]]))
-  }
-  
-  return(numeric_sets)
-}
-
-convertSetToCharacter <- function(numeric_sets){
-  # Initialize a list to store the modified sets
-  set_sets <- list()
-  
-  # Loop through each entry in numeric_sets
-  for (i in seq_along(numeric_sets)) {
-    # Add "Z_" to each element in the current numeric set and convert to character
-    set_sets[[i]] <- paste0("Z_", as.character(numeric_sets[[i]]))
-  }
-  return(set_sets)
-}
-
-is_subset <- function(sets, parents){
-  isSubsets <- sapply(def_set, function(x) 
-    if (length(x) == 0) {return(FALSE)} else {
-    all(x %in% unlist(parents)) } )
-  return(isSubsets)
-}
-```
-
-
-```{r}
-directory <- getwd()
-method <- "GAM"
-title <- paste("SimulationReport", method, sep = "_")
-impdir = directory
-fileform = "csv"
-delim = ";"
-filename <- paste(impdir, "/", title, ".", fileform, sep = "")
-statistics <- read.csv(filename, header = TRUE, sep = delim, encoding="UTF-8")
-pvals <- statistics[ , grepl("pvSet_" , names( statistics ) ) ]
-
-nvec <- dim(pvals)[1]
-AbsIntSetVec <- numeric(nvec)
-AbsUnSetVec <- numeric(nvec)
-sInParents <- numeric(nvec)
-intInParents <- numeric(nvec)
-
-for (Sim in 1:nvec) {
-  target <- statistics[Sim,"target"]
-  S_sets <- obtain_S(target, d)
-  parents <- get_parents(target,dag = dag)
-  
-  accepted_sets <- get_accepted(pvals[Sim,], S_sets)
-  accepted_sets <- convertSetToNumeric(accepted_sets)
-  parents_no <- convertSetToNumeric(list(parents))
-    
-  def_set <- computeDefiningSets(accepted_sets)
-  int_set <- computeSetIntersection(accepted_sets)
-  
-  AppndSets <- append(parents_no, def_set)
-  AbsIntSetVec[Sim] <- length( computeSetIntersection(AppndSets) )
-  AbsUnSetVec[Sim] <- length( get_union(AppndSets) )
-  
-  allSub <- is_subset(def_set,parents_no)
-  if (length(allSub)==0) allSub <- 0 
-  sInParents[Sim] <- sum(allSub) == length(def_set)
-  
-  allSub <- is_subset(int_set,parents_no)
-  if (length(allSub)==0) allSub <- 0 
-  intInParents[Sim] <- sum(allSub) == length(int_set)
-}
-
-Jaccard <- AbsIntSetVec/ AbsUnSetVec
-statistics <- cbind(statistics, 
-                    "AbsIntSetVec" = AbsIntSetVec, 
-                    "AbsUnSetVec" = AbsUnSetVec, 
-                    "Jaccard" = Jaccard)
-mean(Jaccard, na.rm = TRUE)
-mean(1-intInParents)
-```
-
-
-# Generating Extrapolation sample 
-
-
-```{r}
-n <- 1000
-E <- 2
-target <- "Z_3"
-shift <- sample(c(TRUE, FALSE),1)
-  
-Simulation <- sim_data(n, d, dag = dag, coeff_signs = dag_signs, 
-         target =  "Z_3", 
-         eta_df = 2, # $\in \{2, 3, 5, 10, 20, 50, 100\}
-         f_id = 1, # $\in \{1, 2, 3, 4\}
-         multiplic = "product", # $\in \{"product", "sum"\}
-         E = 1, # $\in \{1, 2, 3\}$
-         shift = TRUE, # $\in \{TRUE, FALSE\}$
-         interv = "all", # $\in \{"all", "rand", "close"\}$
-         epsilon_df = 2, # $\in \{2, 3, 5, 10, 20, 50, 100\}$
-         meanshift = 0.1, # $\in \{0, 0.1, 0.2, 0.5, 1, 2, 5, 10\}
-         strength = 0.1, # $\in \{0, 0.1, 0.2, 0.5, 1, 2, 5, 10\} 
-         verbose = FALSE)
-
-data <- as.data.frame(Simulation$sample)
-  
-perc40 <- quantile(data$Z_1, 0.4)
-data$test <- as.numeric(data$"Z_1" > perc40)
-
-trainData <- data[data$test==0,]
-testData <- data[data$test==1,]
-
-
-Zvars <- grep("^Z_", names(data), value = TRUE)
-Xvars <- Zvars[!Zvars %in% c(target)]
-
-engFit <- engression(
-  X = trainData[,Xvars],
-  Y = trainData[,target],
-  noise_dim = 5,
-  hidden_dim = 100,
-  num_layer = 3,
-  dropout = 0.05,
-  batch_norm = TRUE,
-  num_epochs = 50,
-  lr = 10^(-3),
-  beta = 1,
-  silent = TRUE,
-  standardize = TRUE
-)
-
-
-Yhat_eng <- predict(engFit, testData[,Xvars])
-
-form <- as.formula( paste( "Y ~ ", paste( "s(", Xvars,")",collapse=" + "),sep=""))
-gamFit <- gam(form, data = trainData)
-
-
-
-# mahalanobis(x = data[2,], center = data[1,], cov = cov(data))
-```
-
-
-
-
-
-
-
-
-
-
-```{r}
-plot(x = data$Z_4, y = data$Z_3, 
-     col = rgb(data$test==1, (1-data$test)==2, 0, alpha = 0.4), 
-     pch = 16)
-
 ```
 

@@ -186,13 +186,32 @@ gen_epsilon <- function(n, epsilon_df, meanshift, strength){
 # Non-linearities
 f <- function(x, id) {
   if (id == 1) {
-    return(x)
+    return( x )
+    
   } else if (id == 2) {
-    return(pmax(0, x))
+    return( pmax(0, x) )
+    
   } else if (id == 3) {
-    return(sign(x) * sqrt(abs(x)))
+    return( sign(x) * sqrt(abs(x)) )
+    
+  } else if (id == 4) {
+    return( sin(2 * pi * x) )
+    
+  } else if (id == "softplus"){
+    return( log(1+exp(x)) )
+    
+  } else if (id == "square"){
+    return( x^2/2 )
+    
+  } else if (id == "cubic"){
+    return( x^3/3 )
+    
+  } else if (id == "log"){
+    return( if (x<=2) { (x-2)/3 + log(3) } else { log(x) } )
+  
   } else {
-    return(sin(2 * pi * x))
+    stop("Specify valid function class.")
+      
   }
 }
 
