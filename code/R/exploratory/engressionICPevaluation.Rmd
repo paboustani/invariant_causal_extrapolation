@@ -169,7 +169,7 @@ mean(1-intInParents)
 # Generating Extrapolation sample 
 
 ```{r}
-Reps <- 10
+Reps <- 50
 d_gran <- 10^3
 d_seq <- seq(1, 100, length.out= d_gran) # round(max(distTest)*1.1)
 MSEengMat <- MSEgamMat <- list()
@@ -177,9 +177,8 @@ MSEengMat <- MSEgamMat <- list()
 n <- 10^4
 E <- 1
 target <- "Z_3"
-quant <- 0.3
-regressors <- "all" # all, parents, descendants, ancestors
-
+quant <- 0.4
+regressors <- "parents" # all, parents, descendants, ancestors
 
 target =  "Z_3"
 eta_df = 2 # $\in \{2, 3, 5, 10, 20, 50, 100\}
@@ -192,6 +191,11 @@ epsilon_df = 2 # $\in \{2, 3, 5, 10, 20, 50, 100\}$
 meanshift = 0.1 # $\in \{0, 0.1, 0.2, 0.5, 1, 2, 5, 10\}
 strength = 0.1 # $\in \{0, 0.1, 0.2, 0.5, 1, 2, 5, 10\} 
 
+# engLossMat <- numeric(d_gran)
+# names(engLossMat) <- paste("D",1:length(engLossMat),sep = "")
+# 
+# gamLossMat <- numeric(d_gran)
+# names(gamLossMat) <- paste("D",1:length(gamLossMat),sep = "")
 
 cluster <- makeSOCKcluster(3)
 registerDoSNOW(cluster)
@@ -210,13 +214,14 @@ foreach(rep = 1:Reps,
 
   load_packages(packages) # loading all packages into cores
   load_files(files, folders, directory) # loading source files into cores
-  
+
   # Setting up framework for error message printing
 
-# for (rep in 1:Reps){
+
   tryCatch(
     {
-  
+
+# for (rep in 1:Reps){
       Simulation <- sim_data(n, d = 6, dag = dag, coeff_signs = dag_signs, 
                target = target, 
                eta_df = eta_df, # $\in \{2, 3, 5, 10, 20, 50, 100\}
@@ -279,43 +284,61 @@ foreach(rep = 1:Reps,
       Y <- as.matrix(testData[, Xvars])
       distTest <- apply(Y, 1, function(y) min(sqrt(rowSums((X - y)^2))))
       
-      MSEengD <- numeric(d_gran)
-      MSEgamD <- numeric(d_gran)
+      engLoss <- numeric(d_gran)
+      gamLoss <- numeric(d_gran)
       
       for (i in 1:d_gran) {
         d_subset <- which(distTest<=d_seq[i])
-        MSEengD[i] <- mean((Yhat_eng[d_subset] - testData[d_subset,target])^2)
-        MSEgamD[i] <- mean((Yhat_gam$predictions[d_subset] - testData[d_subset,target])^2) 
+        
+        # MSE 
+        engLoss[i] <- round(mean((Yhat_eng[d_subset] - testData[d_subset,target])^2), 3)
+        gamLoss[i] <- round(mean((Yhat_gam$predictions[d_subset] - testData[d_subset,target])^2), 3)
+        
+        # ABS
+        # engLoss[i] <- round( max( abs(Yhat_eng[d_subset] - testData[d_subset,target]) ), 3)
+        # gamLoss[i] <- round( max( abs(Yhat_gam$predictions[d_subset] - testData[d_subset,target])), 3)
+        # engLoss[i] <- round(chebyshev(Yhat_eng[d_subset], testData[d_subset,target]),3)
+        # gamLoss[i] <- round(chebyshev(Yhat_gam$predictions[d_subset], testData[d_subset,target]),3)
       }
       
-      names(MSEengD) <- 1:length(MSEengD)
-      names(MSEgamD) <- 1:length(MSEgamD)
+      names(engLoss) <- paste("D",1:length(engLoss),sep = "")
+      names(gamLoss) <- paste("D",1:length(gamLoss),sep = "")
       
-      stats <- c(n , target, quant, regressors, eta_df, f_id, multiplic, 
+      # engLossMat <- rbind(engLossMat, engLoss)
+      # gamLossMat <- rbind(gamLossMat, gamLoss)
+      
+      stats <- c(n , target, quant, regressors, eta_df, f_id, multiplic,
                  E, shift, interv, epsilon_df, meanshift, strength)
-      names(stats) <- c("n" , "target", "quant", "regressors", "eta_df", "f_id", "multiplic", 
+      names(stats) <- c("n" , "target", "quant", "regressors", "eta_df", "f_id", "multiplic",
                  "E", "shift", "interv", "epsilon_df", "meanshift", "strength")
-      
-      record_stats( c(stats, MSEengD),
+
+      record_stats( c(stats, engLoss),
                  title = paste("ExtraplolationStorage", "eng", sep = "_") )
-      
-      record_stats( c(stats, MSEgamD),
+
+      record_stats( c(stats, gamLoss),
                  title = paste("ExtraplolationStorage", "GAM", sep = "_") )
-      
-      
-    }, error = function(e) { 
-      
+
+
+    }, error = function(e) {
+
       # printing error if occurred
       record_stats( c("Error"=conditionMessage(e)),
                  title =  "ExtraplolationReport" )
-    
-    } 
+
+    }
   ) # ending tryCatch
 }
 
 
 close(pb)
 stopCluster(cluster)
+# 
+# range(MSEengDmat)
+# range(MSEgamDmat[2,])
+```
+
+```{r}
+# abdiv
 ```
 
 
@@ -323,13 +346,27 @@ stopCluster(cluster)
 
 delim <- ";"
 MSEengMat <- read.csv(paste("ExtraplolationStorage", "eng.csv", sep = "_"), 
-                       header = TRUE, sep = delim, encoding="UTF-8")
-MSEgamMat <- read.csv(paste("ExtraplolationStorage", "GAM.csv", sep = "_"), 
-                       header = TRUE, sep = delim, encoding="UTF-8")
+                       header = TRUE, sep = delim, encoding="UTF-8" )
+MSEengMat <- MSEengMat[quant == 0.4, paste("D",1:d_gran, sep = "")] 
+MSEengMat[] <- lapply(MSEengMat, as.numeric)
+MSEengMat <- as.matrix( MSEengMat )
+# 
+# MSEengMat[] <- lapply(MSEengMat, function(x) if(is.integer(x)) as.numeric(x) else x)
+# MSEengMat <- as.matrix( MSEengMat[,paste("D",1:d_gran, sep = "")] )
 
-maxval <- max(range(colMeans(MSEgamMat))[2], range(colMeans(MSEengMat))[2])
-plot(d_seq, colMeans(MSEgamMat), type = "l", ylim = c(0,maxval))
-points(d_seq, colMeans(MSEengMat), col = "red", type = "l")
+
+MSEgamMat <- read.csv(paste("ExtraplolationStorage", "GAM.csv", sep = "_"), 
+                       header = TRUE, sep = delim, encoding="UTF-8", fill = TRUE)
+MSEgamMat <- MSEgamMat[quant == 0.4,paste("D",1:d_gran, sep = "")] 
+MSEgamMat[] <- lapply(MSEgamMat, as.numeric)
+MSEgamMat <- as.matrix( MSEgamMat)
+
+engMean <- colMeans(MSEengMat, na.rm = TRUE)
+GAMmean <- colMeans(MSEgamMat, na.rm = TRUE)
+
+plot(d_seq, GAMmean, type = "l", 
+     ylim = c(0, range(engMean,GAMmean)[2] ) )
+points(d_seq, engMean, col = "red", type = "l")
 ```
 
 
@@ -347,60 +384,6 @@ plot(x = data$Z_4, y = data$Z_3,
 
 
 
-
-
-
-
-```{r}
-
-
-directory <- getwd()
-title <-"ExtraplolationStorage"
-impdir = directory
-fileform = "txt"
-filename <- paste(impdir, "/", title, ".", fileform, sep = "")
-# statistics <- read.csv(filename, header = TRUE, sep = delim, encoding="UTF-8")
-
-
-
-# Suppose myList is your list object
-myList <- list(a = 1:3, b = letters[1:3])
-
-# Open a connection to a text file for writing
-fileConn <- file(filename)
-
-# Write each element of the list as a line in the text file
-for (i in seq_along(myList)) {
-  writeLines(paste(names(myList)[i], toString(myList[[i]])), fileConn)
-}
-
-# Close the file connection
-close(fileConn)
-
-```
-
-
-
-```{r}
-# Open a connection to the text file for reading
-fileConn <- file(filename)
-
-# Initialize an empty list
-loadedList <- list()
-
-# Read each line from the text file and parse it to reconstruct the list
-while (length(line <- readLines(fileConn, n = 1)) > 0) {
-  elements <- strsplit(line, " ")[[1]]
-  loadedList[[elements[1]]] <- as.numeric(elements[-1])
-}
-
-# Close the file connection
-close(fileConn)
-
-# Now loadedList contains the list object loaded from the text file
-print(loadedList)
-
-```
 
 
 
