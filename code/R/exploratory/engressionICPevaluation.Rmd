@@ -116,7 +116,7 @@ is_subset <- function(sets, parents){
 ```{r}
 directory <- getwd()
 method <- "GAM"
-title <- paste("SimulationReport", method, sep = "_")
+title <- paste("simulation/SimulationReport", method, sep = "_")
 impdir = directory
 fileform = "csv"
 delim = ";"
@@ -160,9 +160,68 @@ statistics <- cbind(statistics,
                     "AbsIntSetVec" = AbsIntSetVec, 
                     "AbsUnSetVec" = AbsUnSetVec, 
                     "Jaccard" = Jaccard)
-mean(Jaccard, na.rm = TRUE)
-mean(1-intInParents)
 ```
+
+
+```{r}
+statsMat <- matrix(NA, 2,2)
+statsMat[2,1] <- mean(Jaccard, na.rm = TRUE)
+statsMat[1,2] <- mean(1-intInParents)
+```
+
+
+```{r}
+# Define your data and symbols
+x <- statsMat[,2]
+y <- statsMat[,1]
+
+# Calculate the range of x and y
+x_range <- range(0, 0.3)
+y_range <- range(0, 1)
+
+# Plot the data without border
+project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+figure_folder <- "writing/figures/"
+figure_dir <- paste(project_folder,figure_folder, sep = "" )
+
+fig_name <- "JACCARD_FWER_GAMeng"
+
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+           width = 6, height = 6, horizontal = FALSE)  # Open EPS device
+
+plot(x, y, xlim = x_range, ylim = y_range, type = "n", xlab = "", ylab = "", xaxt = "n", yaxt = "n", bty = "n", ann = FALSE)
+
+# Add axes
+axis(1, at = seq(0, 0.3, by = 0.05), labels = sprintf("%.2f", seq(0, 0.3, by = 0.05)))
+axis(2, at = seq(0, 1, by = 0.2))
+
+# Add vertical dotted line at x = 0.05
+# abline(, lty = 3, ylim = c(0, 1))
+segments(0.05, 0, 0.05, 1, lty = 3)
+
+
+# Plot the first observation as a filled pink square
+points(x[1], y[1], pch = 22, col = "pink", bg = "pink", cex = 2)
+
+# Plot the second observation as a green star
+points(x[2], y[2], pch = 2, col = "green", cex = 1.5, lwd=3.4)
+
+# Add legend
+legend("right",
+       legend = c("GAM", "Engression"),
+       pch = c(22, 2), col = c("pink", "green"),
+       pt.bg = c("pink", "green"), pt.cex = 1,
+       cex = 0.8, bty = "n", title = "method")
+
+# Add axis labels
+mtext("FWER", side = 1, line = 2)
+mtext("JACCARD SIMILARITY", side = 2, line = 2)
+
+dev.off()  # Close EPS device
+
+```
+
+
 
 
 # PART 2 :
@@ -345,9 +404,9 @@ stopCluster(cluster)
 ```{r}
 
 delim <- ";"
-MSEengMat <- read.csv(paste("ExtraplolationStorage", "eng.csv", sep = "_"), 
+MSEengMat <- read.csv(paste("ExtraplolationStorage", "eng_F1.csv", sep = "_"), 
                        header = TRUE, sep = delim, encoding="UTF-8" )
-MSEengMat <- MSEengMat[quant == 0.4, paste("D",1:d_gran, sep = "")] 
+MSEengMat <- MSEengMat[, paste("D",1:d_gran, sep = "")] # quant == 0.4
 MSEengMat[] <- lapply(MSEengMat, as.numeric)
 MSEengMat <- as.matrix( MSEengMat )
 # 
@@ -355,9 +414,9 @@ MSEengMat <- as.matrix( MSEengMat )
 # MSEengMat <- as.matrix( MSEengMat[,paste("D",1:d_gran, sep = "")] )
 
 
-MSEgamMat <- read.csv(paste("ExtraplolationStorage", "GAM.csv", sep = "_"), 
+MSEgamMat <- read.csv(paste("ExtraplolationStorage", "GAM_F1.csv", sep = "_"), 
                        header = TRUE, sep = delim, encoding="UTF-8", fill = TRUE)
-MSEgamMat <- MSEgamMat[quant == 0.4,paste("D",1:d_gran, sep = "")] 
+MSEgamMat <- MSEgamMat[,paste("D",1:d_gran, sep = "")] # quant == 0.4
 MSEgamMat[] <- lapply(MSEgamMat, as.numeric)
 MSEgamMat <- as.matrix( MSEgamMat)
 
@@ -368,6 +427,35 @@ plot(d_seq, GAMmean, type = "l",
      ylim = c(0, range(engMean,GAMmean)[2] ) )
 points(d_seq, engMean, col = "red", type = "l")
 ```
+
+
+
+```{r}
+fig_name <- "ExtrapolationUncertainty_GAMeng"
+
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+           width = 6, height = 6, horizontal = FALSE)  # Open EPS device
+
+plot(x = d_seq, y = GAMmean, ylim = c(0, range(engMean,GAMmean)[2] ), type = "l", 
+     bty = "n", ann = FALSE, col = "pink",  lwd=2)
+
+points(d_seq, engMean, col = "green", type = "l", lwd=2)
+
+# Add legend
+legend("right",
+       legend = c("GAM", "Engression"),
+       pch = "-", col = c("pink", "green"),
+       pt.cex = 2.8,
+       cex = 0.8, bty = "n", title = "method")
+
+# Add axis labels 
+mtext("d", side = 1, line = 2)
+mtext("MSE", side = 2, line = 2)
+
+dev.off()
+```
+
+
 
 
 ```{r}
