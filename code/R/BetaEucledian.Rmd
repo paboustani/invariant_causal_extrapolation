@@ -1,0 +1,504 @@
+---
+title: "Spielwiese"
+author: "Philip Boustani"
+date: "2024-08-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+# List of required packages
+packages <- c(
+  "engression",
+  "CondIndTests", 
+  "lawstat", # For levene.test
+  "stats", # For ks.test, wilcox.test
+  "mgcv", # for fitting GAMs
+  "nonlinearICP",
+  "readtext", # loading csv files
+  # "utils", # progress bar 
+  "foreach",
+  "doSNOW",  # parallel processing with progress bar 
+  "data.tree", # to create tree structures from hierarchical data
+  "quantregForest", # quantile regression forest
+  # "InvariantCausalPrediction",
+  # "distributionsrd",
+  "torch", 
+  "MASS", 
+  "dplyr"
+)
+
+# First, installing packages which are not yet installed and then loading all of them
+load_packages <- function(packages){
+  for (pkg in packages) {
+    if(!require(pkg, character.only = TRUE)){
+      install.packages(pkg, character.only = TRUE);
+      library(pkg, character.only = TRUE)
+    }
+  }
+}
+
+# loading packages
+load_packages(packages)
+```
+
+```{r}
+# List of required source files
+files <- c(
+)
+
+# if applicable, specify entire folders to be loaded
+folders <- c(
+  "gaussianEngression",
+  "engression_supplementary"
+  # "external_modified", 
+  # "singleindexengression"
+)
+
+# Detect working directory and load all files 
+load_files <- function(files, folders, directory){
+  
+  paths <- c(
+    file.path(directory, files),
+    file.path(directory, list.files(folders, full.names = TRUE))
+  )
+  
+  for (path in paths) {
+    source(path)
+  }
+}
+
+# loading directory  
+directory <- getwd()
+load_files(files, folders, directory)
+```
+
+
+
+```{r}
+f <- function(x, id) {
+  if (id == 1) {
+    return( x )
+  } else if (id == 2) {
+    return( pmax(0, x) )
+
+  } else if (id == 3) {
+    return( sign(x) * sqrt(abs(x)) )
+
+  } else if (id == 4) {
+    return( sin(2 * pi * x) )
+
+  } else if (id == "softplus"){
+    return( log(1+exp(x)) )
+
+  } else if (id == "square"){
+    return( x^2/2 )
+
+  } else if (id == "cubic"){
+    return( x^3/3 )
+
+  } else if (id == "log"){
+    return(ifelse(x <= 2, (x - 2) / 3 + log(3), log(x)))
+
+  } else {
+    stop("Specify valid function class.")
+
+  }
+} 
+```
+
+
+
+# EXPLORATORY ------------------------------------------------------------------
+
+```{r}
+n <- 10^2
+
+X_1 <- rnorm(n, sd = 5)
+X_2 <- rnorm(n, sd = 5)
+X_3 <- rnorm(n, sd = 5)
+X_4 <- rnorm(n, sd = 5)
+
+beta <- c(3,-2,1.5,5)
+beta_true <- beta/norm(beta, type = "2")
+
+Z <- beta[1]*X_1 + beta[2]*X_2 + beta[3]*X_3 + beta[4]*X_4
+Y <- f(x = Z + rnorm(n, mean = 0,sd = 3), id = "cubic") 
+
+Z_1 <- scale(X_1)
+Z_2 <- scale(X_2)
+Z_3 <- scale(X_3)
+Z_4 <- scale(X_4)
+Y_Z <- scale(Z)
+Y_sc <- scale(Y) 
+
+beta_true
+```
+
+```{r}
+lmfit <- lm(Z ~ X_1 + X_2 + X_3 + X_4)
+beta_hat1 <- summary(lmfit)$coefficients[-1, 1]
+beta_hat1/norm(beta_hat1, type = "2")
+```
+
+
+```{r}
+lmfit2 <- lm(Y_Z ~ Z_1 + Z_2 + Z_3 + Z_4)
+beta_hat2 <- summary(lmfit2)$coefficients[-1, 1]
+beta_hat2/norm(beta_hat2, type = "2")
+```
+
+
+
+```{r}
+lmfit2 <- lm(Y_Z ~ X_1 + X_2 + X_3 + X_4)
+beta_hat2 <- summary(lmfit2)$coefficients[-1, 1]
+beta_hat2/norm(beta_hat2, type = "2")
+```
+
+
+```{r}
+lmfit2 <- lm(Z ~ Z_1 + Z_2 + Z_3 + Z_4)
+beta_hat2 <- summary(lmfit2)$coefficients[-1, 1]
+beta_hat2/norm(beta_hat2, type = "2")
+```
+
+
+
+
+```{r}
+lmfit3 <- lm(Y_sc ~ Z_1 + Z_2 + Z_3 + Z_4)
+beta_hat3 <- summary(lmfit3)$coefficients[-1, 1]
+beta_hat3/norm(beta_hat3, type = "2")
+```
+
+
+
+
+
+```{r}
+# Load necessary libraries
+library(stats)
+library(base)
+
+# Function to initialize beta using PCA
+initialize_beta <- function(X, Y) {
+  # Standardize the predictor matrix
+  X_std <- scale(X)
+  
+  # Perform PCA
+  pca_result <- prcomp(X_std, center = TRUE, scale. = TRUE)
+  
+  # Get the first principal component
+  beta_init <- pca_result$rotation[,1]
+  
+  return(beta_init)
+}
+
+# Example usage
+# Generate example data
+set.seed(123)
+X <- matrix(rnorm(100 * 5), nrow = 100, ncol = 5) # Predictor matrix with 100 samples and 5 features
+Y <- rnorm(100) # Response vector with 100 samples
+```
+
+
+```{r}
+# Initialize beta
+beta_initial <- initialize_beta(cbind(X_1, X_2, X_3, X_4), Y)
+beta_initial/norm(beta_initial, type = "2")
+
+```
+
+```{r}
+cosine_similarity <- function(A, B) {
+  # Ensure that A and B are vectors of the same length
+  if (length(A) != length(B)) {
+    stop("Vectors A and B must be of the same length")
+  }
+  
+  # Compute the dot product of A and B
+  dot_product <- sum(A * B)
+  
+  # Compute the magnitudes of A and B
+  magnitude_A <- sqrt(sum(A^2))
+  magnitude_B <- sqrt(sum(B^2))
+  
+  # Compute the cosine similarity
+  cosine_sim <- dot_product / (magnitude_A * magnitude_B)
+  
+  return(cosine_sim)
+}
+```
+
+```{r}
+# Load necessary libraries
+library(MASS)
+
+# Function to initialize beta using SIR
+initialize_beta_SIR <- function(X, Y, H = 10) {
+  # Standardize the predictor matrix
+  X_std <- scale(X)
+  Y <- scale(Y)
+  
+  # Slice the response variable
+  slices <- cut(Y, breaks = quantile(Y, probs = seq(0, 1, length.out = H + 1)), include.lowest = TRUE)
+  
+  # Calculate the means of X in each slice
+  slice_means <- sapply(levels(slices), function(slice) colMeans(X_std[slices == slice, , drop = FALSE]))
+  
+  # Compute the covariance matrix of the slice means
+  cov_slice_means <- cov(t(slice_means))
+  
+  # Eigen decomposition of the covariance matrix
+  eig <- eigen(cov_slice_means)
+  
+  # Select the leading eigenvector
+  beta_init <- eig$vectors[,1]
+  
+  # Predict the index from the input X and beta_init via linear prediction
+  index_pred <- X_std %*% beta_init
+  
+  return(list(beta_init = beta_init, index_pred = index_pred))
+}
+```
+
+
+```{r}
+X <- cbind(X_1, rnorm(n, mean = 5, sd = 6), X_2, X_3, X_4, rnorm(n))
+# Initialize beta using SIR
+beta_initial_SIR <- initialize_beta_SIR(X, Y, H = 20)$index_pred
+
+beta/norm(beta, type = "2")
+print("Initial beta using SIR:")
+print(beta_initial_SIR)
+# beta_initial_SIR/norm(beta_initial_SIR, type = "2")
+```
+
+
+
+
+
+
+
+
+
+
+
+# BETA INITIALIZATION SIMULATIONS ----------------------------------------------
+
+
+```{r}
+coef_doc_title <- "SIE_init_coefficients"
+SimRep <- 30
+
+# Set up parallel computing
+cluster <- makeSOCKcluster(3)
+registerDoSNOW(cluster)
+
+# setting up progress bar
+pb <- txtProgressBar(max=SimRep, style=3)
+progress <- function(n) setTxtProgressBar(pb, n)
+opts <- list(progress=progress)
+
+# Starting parallel processing unit
+foreach(rep = 1:SimRep,
+        .errorhandling = 'pass',
+        .combine=rbind,
+        .options.snow = opts ) %dopar% { # for(rep in 1:SimRep)
+          
+  # loading all packages into cores
+  load_packages(packages)
+  # loading source files into cores
+  load_files(files, folders, directory) 
+
+  # Setting up framework for error message printing
+  tryCatch(
+  # Start Computations
+    {
+      
+  # loading all packages into cores
+  load_packages(packages)
+  # loading source files into cores
+  load_files(files, folders, directory) 
+  
+  # simulate data
+  n <- 10000
+  
+  for (func in c("softplus", "square", "cubic", "log")) {
+
+    X_1 <- rnorm(n, sd = 5)
+    X_2 <- rnorm(n, sd = 5)
+    X_3 <- rnorm(n, sd = 5)
+    X_4 <- rnorm(n, sd = 5)
+    X_5 <- rnorm(n, sd = 5)
+    X_6 <- rnorm(n, sd = 5)
+    
+    if (func=="square") {
+      X_1 <- abs(X_1)
+      X_2 <- abs(X_2)
+      X_3 <- abs(X_3)
+      X_4 <- abs(X_4)
+      X_5 <- abs(X_5)
+      X_6 <- abs(X_6)
+    }
+    
+    Xdata <- cbind(X_1, X_2, X_3, X_4, X_5, X_6)
+    
+    beta <- c(3,0,-2,0.5,5,0)
+    beta_true <- beta/norm(beta, type = "2")
+    names(beta_true) <- paste("betatrue", 1:6,sep = "_")
+    
+    Z <- beta[1]*X_1 + beta[2]*X_2 + beta[3]*X_3 + beta[4]*X_4 + beta[5]*X_5 + beta[6]*X_6
+    Y <- f(x = Z + rnorm(n, mean = 0,sd = 3), id = func) 
+    
+    # Sliced Inverse Regression
+    method <- "SIR"
+    beta_hat <- init_beta(Xdata, Y, init_method = method)$beta_init
+    if (beta_hat[1]<0) beta_hat <- beta_hat*(-1)
+    names(beta_hat) <- paste("betahat", 1:6,sep = "_")
+    l2dist <- round( sqrt(sum((beta_true - beta_hat)^2))*100 , 4)
+    output <- c(func = func, n = n, method = method, round(beta_true, 3), 
+                    beta_hat, rep = rep, eucledian = l2dist)
+    
+    # linear regression
+    method <- "linear"
+    beta_hat <- init_beta(Xdata, Y, init_method = method)$beta_init
+    if (beta_hat[1]<0) beta_hat <- beta_hat*(-1)
+    names(beta_hat) <- paste("betahat", 1:6,sep = "_")
+    l2dist <- round( sqrt(sum((beta_true - beta_hat)^2))*100 , 4)
+    output <- rbind(output, 
+                    c(func = func, n = n, method = method, round(beta_true, 3), 
+                    beta_hat, rep = rep, eucledian = l2dist))
+    
+    # quantile prediction engression 
+    method <- "gaussian_quantile"
+    beta_hat <- init_beta(Xdata, Y, init_method = method)$beta_init
+    if (beta_hat[1]<0) beta_hat <- beta_hat*(-1)
+    names(beta_hat) <- paste("betahat", 1:6,sep = "_")
+    l2dist <- round( sqrt(sum((beta_true - beta_hat)^2))*100 , 4)
+    output <- rbind(output, 
+                    c(func = func, n = n, method = method, round(beta_true, 3), 
+                    beta_hat, rep = rep, eucledian = l2dist))
+    
+    record_stats( output, title = paste(coef_doc_title, func, sep = "_") )
+  }
+
+  # end computations and start error report 
+    }, error = function(e) {
+
+      # printing error if occurred
+      record_stats( c(method, func, conditionMessage(e)),
+               title =  paste("ErrorReport_SIE_init", sep = "_") )
+    }
+  # ending tryCatch
+  ) 
+# ending parallel processing 
+}
+close(pb)
+stopCluster(cluster)
+```
+
+
+
+```{r}
+betadf <- read.csv("SIE_init_coefficients_log.csv", 
+                         header = TRUE, sep = ";", encoding="UTF-8")
+
+betadf <- betadf[(betadf$method %in% c("SIR", "linear", "gaussian_quantile")),]
+
+
+numeric_cols <- !(colnames(betadf)%in% c("method", "func"))
+betadf[,numeric_cols] <- betadf[,numeric_cols] %>%
+  mutate_all(~ as.numeric(as.character(.)))
+
+betadf <- na.omit(betadf)
+
+results <- matrix(NA,15,4)
+colnames(results) <- c("n", "method", "mean", "sd")
+i <- 0
+for (n in unique(betadf$n)) {
+  for (method in unique(betadf$method)) {
+    i<-i+1
+    results[i,1] <- n
+    results[i,2] <- method
+    results[i,3] <- mean(betadf$eucledian[(betadf$n==n) & (betadf$method==method)], na.rm = TRUE)
+    results[i,4] <- sd(betadf$eucledian[(betadf$n==n) & (betadf$method==method)], na.rm = TRUE)
+  }
+}
+
+results <- as.data.frame(results)
+results$mean <- as.numeric(results$mean)
+results$sd <- as.numeric(results$sd)
+index_vec <- rep(1:5, each = 3) + rep(c(-0.1, 0, 0.1), 5)
+```
+
+
+```{r}
+# specify export file name
+fig_name <- "Beta_Eucledian_4"
+# fig_name <- "JACCARD_FWER_preANM"
+
+# Specify export folder
+project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+figure_folder <- "writing/figures/"
+figure_dir <- paste(project_folder,figure_folder, sep = "" )
+
+# Open EPS device
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+           width = 5, height = 5, horizontal = FALSE)  
+
+# Reduce space around plots and remove the box around the plot
+par(mar = c(3, 3, 0.1, 0.1), bty = "n")
+
+plot(1, xlim = range(index_vec),  ylim = range(results$mean-2*results$sd, results$mean+2*results$sd), 
+     axes = FALSE, type = "n", xlab ="", ylab ="")
+
+methods <- unique(betadf$method)
+lty <- c(3,5,1)
+for (j in 1:length(methods)) {
+  method <- methods[j]
+  method_indices <- which(results$method == method)
+  lines(index_vec[method_indices], results$mean[method_indices], col = "magenta", lty = lty[j], lwd = 1)
+}
+
+arrows(x0 = index_vec, x1 = index_vec, 
+       y0 = results$mean - 1.96 * results$sd, y1 = results$mean + 1.96 * results$sd, 
+       code = 3, angle = 90, lwd = 1, col = "pink", length = 0.05)
+points(index_vec,results$mean, pch = 16, col = "magenta")
+
+axis(1, at = 1:5, labels = unique(betadf$n))
+axis(2)
+
+mtext("sample size", side = 1, line = 2)
+mtext("eucledian distance", side = 2, line = 2)
+
+# Add a legend
+legend("topright", legend = c("SIR", "LM", "GQP"), col = "magenta", 
+       lty = lty, lwd = 2, title = "Methods", bty = "n")
+# Close EPS device
+dev.off()  
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

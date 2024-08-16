@@ -1,0 +1,12 @@
+"ID";"target";"eta_df";"multiplic";"shift";"epsilon_df";"meanshift";"strength";"F_id";"N";NA
+"w-153923";"Z_1";"50";"product";"TRUE";"50";"2";"10";"cubic";"100";"keine Zeilen im Input verfügbar"
+"b-313627";"Z_5";"50";"sum";"FALSE";"50";"1";"1";"softplus";"200";"keine Zeilen im Input verfügbar"
+"b-121777";"Z_5";"20";"sum";"TRUE";"20";"5";"0.5";"log";"200";"keine Zeilen im Input verfügbar"
+"n-195623";"Z_6";"5";"product";"FALSE";"5";"10";"10";"softplus";"500";"NA/NaN/Inf in 'y'"
+"b-399660";"Z_1";"2";"product";"TRUE";"2";"0.2";"10";"softplus";"500";"NA/NaN/Inf in 'x'"
+"v-415338";"Z_1";"2";"sum";"FALSE";"2";"0";"10";"softplus";"500";"NA/NaN/Inf in 'x'"
+"x-997814";"Z_3";"2";"product";"TRUE";"2";"1";"2";"softplus";"2000";"NA/NaN/Inf in 'x'"
+"x-151629";"Z_4";"50";"product";"TRUE";"50";"0.1";"10";"softplus";"5000";"keine Zeilen im Input verfügbar"
+"q-945085";"Z_2";"2";"sum";"TRUE";"2";"0.5";"1";"softplus";"5000";"NA/NaN/Inf in 'x'"
+"z-753925";"Z_6";"2";"product";"FALSE";"2";"5";"0";"softplus";"5000";"NA/NaN/Inf in 'y'"
+"p-318654";"Z_3";"5";"product";"TRUE";"5";"1";"10";"softplus";"5000";"NA/NaN/Inf in 'x'"

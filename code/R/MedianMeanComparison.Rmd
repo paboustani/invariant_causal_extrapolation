@@ -1,0 +1,497 @@
+---
+title: "MedianMeanComparison"
+author: "Philip Boustani"
+date: "2024-08-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+# List of required packages
+packages <- c(
+  "mgcv"
+)
+
+# First, installing packages which are not yet installed and then loading all of them
+for (pkg in packages) {
+  if(!require(pkg, character.only = TRUE)){
+    install.packages(pkg, character.only = TRUE);
+    library(pkg, character.only = TRUE)
+  }
+}
+```
+
+```{r}
+# List of required source files
+files <- c(
+)
+
+# if applicable, specify entire folders to be loaded
+folders <- c(
+  "gaussianEngression",
+  "engression_supplementary",
+  "external_modified"
+  # "singleindexengression"
+)
+
+# Detect working directory and load all files 
+load_files <- function(files, folders, directory){
+  
+  paths <- c(
+    file.path(directory, files),
+    file.path(directory, list.files(folders, full.names = TRUE))
+  )
+  
+  for (path in paths) {
+    source(path)
+  }
+}
+
+# loading directory  
+directory <- getwd()
+load_files(files, folders, directory)
+```
+
+
+
+
+
+```{r}
+f <- function(x, id) {
+  if (id == 1) {
+    return( x )
+  } else if (id == 2) {
+    return( pmax(0, x) )
+
+  } else if (id == 3) {
+    return( sign(x) * sqrt(abs(x)) )
+
+  } else if (id == 4) {
+    return( sin(2 * pi * x) )
+
+  } else if (id == "softplus"){
+    return( log(1+exp(x)) )
+
+  } else if (id == "square"){
+    return( x^2/2 )
+
+  } else if (id == "cubic"){
+    return( x^3/3 )
+
+  } else if (id == "log"){
+    return(ifelse(x <= 2, (x - 2) / 3 + log(3), log(x)))
+
+  } else {
+    stop("Specify valid function class.")
+
+  }
+} 
+```
+
+
+
+
+
+
+```{r}
+sim_method <- "cubic"
+beta <- c(3,0.5)
+# Generate example data (strictly increasing function)
+set.seed(123)
+n <- 10^4
+# X1 <-  runif(n, 0,5) # rnorm(n,0,2) # rt(n, df=100) # rnorm(n,5,2) # runif(n, 0,5)
+# X2 <-  runif(n, 0,5) # rnorm(n,0,2) # rt(n, df=100) # rnorm(n,10,3) # runif(n, 0,5)
+# X1 <- abs(X1)
+# X2 <- abs(X2)
+Z <- runif(n, -7,7) #beta[1]*X1 + beta[2]*X2 
+Ytrue <- f( Z, id =  sim_method)
+Y <- f( Z + rnorm(n, mean=0, sd=2), id = sim_method )
+
+plot(Z, Y, xlim = c(-5,5), ylim = c(-40,40))
+lines(sort(Z), sort(Ytrue), col = "red")
+```
+
+
+
+```{r}
+Zest <- seq(min(Z), max(Z), length.out=10^4)
+
+engfit <- engression( X = Z, Y = Y, noise_dim = 5, hidden_dim = 100,
+                      num_layer = 3, dropout = 0.05, batch_norm = TRUE,
+                      num_epochs = 1000, lr = 10^(-3), beta = 1, silent = TRUE,
+                      standardize = TRUE)
+```
+
+
+```{r}
+Zest <- seq(min(Z), max(Z), length.out=10^3)
+mean_hat <- predict(engfit, Zest)
+quantiles <- predict(engfit, Zest, type = "quantiles", 
+                     quantiles = c(0.05,0.1,0.2, 0.5, 0.8, 0.9,0.95) )
+```
+
+```{r}
+mean_hat <- gam( mean_hat ~ s(Zest) )$fitted.values
+for (j in 1:NCOL(quantiles)) {
+  quantiles[,j] <- gam( quantiles[,j] ~ s(Zest) )$fitted.values
+}
+```
+
+```{r}
+sample_index <- sample(1:n, 10^3)
+Zsample <- Z[sample_index]
+Ysample <- Y[sample_index]
+```
+
+
+```{r}
+# specify export file name
+fig_name <- "MeanMedianComparison"
+# fig_name <- "JACCARD_FWER_preANM"
+
+# Specify export folder
+project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+figure_folder <- "writing/figures/"
+figure_dir <- paste(project_folder,figure_folder, sep = "" )
+
+# Open EPS device
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+           width = 5, height = 4, horizontal = FALSE)
+
+# Reduce space around plots and remove the box around the plot
+par(mar = c(3, 3, 0.1, 0.1), bty = "n")
+
+plot(Zest, mean_hat, type = "n", xlim = c(-5,5), ylim = c(-40,40), 
+     xlab = "n", ylab = "n", axes = FALSE)
+polygon(c(rev(Zest), Zest), c(rev(quantiles[,7]), quantiles[,1]), 
+        col = "plum1", border = NA )
+polygon(c(rev(Zest), Zest), c(rev(quantiles[,6]), quantiles[,2]), 
+        col = "plum2", border = NA )
+polygon(c(rev(Zest), Zest), c(rev(quantiles[,5]), quantiles[,3]), 
+        col = "plum3", border = NA )
+points(Zsample, Ysample, pch = 16, col = "pink2")
+lines(Zest, quantiles[,4], col = "cyan", lty = 1, lwd = 2)
+lines(Zest, mean_hat,col = "green", lty = 1, lwd = 2)
+lines(Zest, f(Zest,id = sim_method ), col = "red", lty = 2, lwd = 2)
+
+legend("topleft", 
+       legend = c("training data", "true mean", "predicted mean", 
+                  "predicted median", "60% CI", "80% CI", "90% CI"), 
+       col = c("pink2", "red", "green", "cyan", "plum3", "plum2", "plum1"), 
+       pch = c(16, NA, NA, NA, NA, NA, NA),
+       lty = c(NA, 3, 1, 1, 1, 1, 1),  
+       lwd = c(NA, 2, 2, 2, 7, 7, 7),  
+       bty = "n", cex = 0.9)
+
+axis(1, at = seq(-5,5,by=1))
+axis(2)
+
+mtext("index", side = 1, line = 2)
+mtext("Y", side = 2, line = 2)
+# Close EPS device
+dev.off()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+n <- 10^3
+  
+# for (func in c("softplus", "square", "cubic", "log"))
+func <- "square"
+
+X_1 <- rnorm(n, sd = 5)
+X_2 <- rnorm(n, sd = 5)
+X_3 <- rnorm(n, sd = 5)
+X_4 <- rnorm(n, sd = 5)
+X_5 <- rnorm(n, sd = 5)
+X_6 <- rnorm(n, sd = 5)
+E <- sample(1:3, n, replace = TRUE)
+
+if (func=="square") {
+  X_1 <- abs(X_1)
+  X_2 <- abs(X_2)
+  X_3 <- abs(X_3)
+  X_4 <- abs(X_4)
+  X_5 <- abs(X_5)
+  X_6 <- abs(X_6)
+}
+
+Xdata <- as.data.frame( cbind(X_1, X_2, X_3, X_4, X_5, X_6) )
+
+beta <- c(3,0,-2,0.5,5,0)
+beta_true <- beta/norm(beta, type = "2")
+names(beta_true) <- paste("betatrue", 1:6,sep = "_")
+
+Z <- beta[1]*X_1 + beta[2]*X_2 + beta[3]*X_3 + beta[4]*X_4 + beta[5]*X_5 + beta[6]*X_6
+Y <- f(x = Z + rnorm(n, mean = 0,sd = 3), id = func) 
+Ytrue <- f(x = Z, id = func) 
+
+```
+
+
+```{r}
+mean_out <- SIE(X = Xdata,
+                Y,
+                noise_dim = 5,
+                hidden_dim = 100,
+                num_layer = 3,
+                dropout = 0.05,
+                batch_norm = TRUE,
+                num_epochs = 100,
+                lr = 10^(-3),
+                beta = 1,
+                silent = TRUE,
+                standardize = TRUE,
+                GSI_rep = 1, 
+                quantiles = NULL, 
+                return_index = TRUE, 
+                mean_prediction = TRUE, 
+                test_data = Xdata,
+                verbose = FALSE,
+                icp_test = "leveneAndWilcoxResidualDistributions",
+                E = as.factor( E ), 
+                shapiro = TRUE,
+                init_method = "gaussian_quantile")
+```
+
+```{r}
+mean_res <- abs(Ytrue - mean_out$predicted)
+mean_mse <- mean(mean_res); mean_mse
+mean_out$shapiro_pval
+mean_out$icp_result
+meanZres <- abs(scale(Z)-mean_out$index)
+meanZmse <- mean(meanZres); meanZmse
+```
+
+
+```{r}
+median_out <- SIE(X = Xdata,
+                Y,
+                noise_dim = 5,
+                hidden_dim = 100,
+                num_layer = 3,
+                dropout = 0.05,
+                batch_norm = TRUE,
+                num_epochs = 100,
+                lr = 10^(-3),
+                beta = 1,
+                silent = TRUE,
+                standardize = TRUE,
+                GSI_rep = 1, 
+                quantiles = NULL, 
+                return_index = TRUE, 
+                mean_prediction = FALSE, 
+                test_data = Xdata,
+                verbose = FALSE,
+                icp_test = "leveneAndWilcoxResidualDistributions",
+                E = as.factor( E ), 
+                shapiro = TRUE,
+                init_method = "gaussian_quantile")
+```
+
+```{r}
+median_res <- abs(Ytrue - median_out$predicted)
+median_mse <- mean(median_res); median_mse
+median_out$shapiro_pval
+median_out$icp_result
+medianZres <- abs(scale(Z)-median_out$index)
+medianZmse <- mean(medianZres); medianZmse
+```
+
+
+```{r}
+plot(median_out$index,Ytrue)
+```
+
+
+
+
+
+
+```{r}
+coef_doc_title <- "SIE_performance_coefficients"
+pred_doc_title <- "SIE_performance_predictions"
+
+SimRep <- 100
+
+# Set up parallel computing
+cluster <- makeSOCKcluster(3)
+registerDoSNOW(cluster)
+
+# setting up progress bar
+pb <- txtProgressBar(max=SimRep, style=3)
+progress <- function(n) setTxtProgressBar(pb, n)
+opts <- list(progress=progress)
+
+# Starting parallel processing unit
+foreach(rep = 1:SimRep,
+        .errorhandling = 'pass',
+        .combine=rbind,
+        .options.snow = opts ) %dopar% { # for(rep in 1:SimRep)
+          
+  # loading all packages into cores
+  load_packages(packages)
+  # loading source files into cores
+  load_files(files, folders, directory) 
+
+  # Setting up framework for error message printing
+  tryCatch(
+  # Start Computations
+    {
+      
+  # loading all packages into cores
+  load_packages(packages)
+  # loading source files into cores
+  load_files(files, folders, directory) 
+  
+  # simulate data
+  n <- 10^3
+  
+  for (func in c("softplus", "square", "cubic", "log")) {
+    X_1 <- rnorm(n)
+    X_2 <- rnorm(n)
+    X_3 <- rnorm(n)
+    X_4 <- rnorm(n)
+    
+    beta <- c(3,-2,1.5,5)
+    # beta/norm(beta, type = "2")
+    Z_nonoise <- beta[1]*X_1 + beta[2]*X_2 + beta[3]*X_3 + beta[4]*X_4
+    Z <- Z_nonoise + rnorm(n, mean = 0,sd = 3)
+    
+    Y_nonoise <- f(x = Z_nonoise, id = func)
+    Y <- f(x = Z, id = func) 
+    
+    data <- as.data.frame(cbind(X_1, X_2, X_3, X_4, Z, Y))
+    
+    # trian/test split
+    thresh_tr <- 10
+    train_df <- subset(data, Z <= thresh_tr)
+    if (func=="square") {
+      train_df <- subset(data, (Z <= thresh_tr) & (Z >= 0))
+    }
+    Xtrain <- train_df[,c("X_1", "X_2", "X_3", "X_4")]
+    Ytrain <- train_df$Y
+    
+    thresh_te <- 0
+    test_df <- subset(data, Z >= thresh_te)
+    Xtest <- test_df[,c("X_1", "X_2", "X_3", "X_4")]
+    Ztest <- test_df$Z
+    Ytest <- test_df$Y
+    
+    # ground truth values
+    Ztrue <- c(Ztrue = Z_nonoise[Z >= thresh_te])
+    Ytrue <- c(Ytrue = Y_nonoise[Z >= thresh_te])
+    
+    # Single index engression
+    method <- c(method = "sie")
+    sie_out <- SIE(
+                  X = as.matrix( Xtrain ),
+                  Y = as.matrix( Ytrain ),
+                  noise_dim = 5,
+                  hidden_dim = 100,
+                  num_layer = 3,
+                  dropout = 0.05,
+                  batch_norm = TRUE,
+                  num_epochs = 100,
+                  lr = 10^(-3),
+                  beta = 1,
+                  silent = TRUE,
+                  standardize = TRUE,
+                  GSI_rep = 3,
+                  test_data = Xtest )
+    sie_hat <- c(sie_hat = sie_out$predicted)
+    beta_hat <- sie_out$beta_hat
+    names(beta_hat) <- paste("beta", 1:4,sep = "_")
+    sd_hat <- sie_out$sd_hat
+    names(sd_hat) <- paste("sd", 1:4,sep = "_")
+
+    record_stats( c(method, func = func, beta_hat, sd_hat, rep = rep),
+                 title = paste(coef_doc_title, sep = "_") )
+
+    # GAM
+    method <- c(method = "gam")
+    gam_hat <- c(gam_hat = getgamPredictions(X = Xtrain,
+                                             Y = Ytrain,
+                                             XTest = Xtest)$predictions )
+    
+    # linear regression
+    method <- c(method = "lm")
+    lmfit <- lm(Y ~ X_1 + X_2 + X_3 + X_4, data = train_df)
+    lm_hat <- lmfit$fitted.values
+    beta_hat <- round(summary(lmfit)$coefficients[-1, 1],3)
+    names(beta_hat) <- paste("beta", 1:4,sep = "_")
+    sd_hat <- round(summary(lmfit)$coefficients[-1, 2],3)
+    names(sd_hat) <- paste("sd", 1:4,sep = "_")
+    
+    # record_stats( round(cbind(Ztest, as.matrix( Xtest ), Ytest, Ztrue, Ytrue, 
+    #                           lm_hat, rep = rep),2),
+    #              title = paste(pred_doc_title, "lm", func, sep = "_") )
+    
+    
+    record_stats( c(method, func = func, beta_hat, sd_hat, rep = rep),
+                 title = paste(coef_doc_title, sep = "_") )
+
+    # generalized single index models
+    method <- c(method = "gsi")
+    np_bw <- npindexbw(xdat = Xtrain, ydat = Ytrain, gradients=TRUE)
+    np_model <- npindex(np_bw, gradients = TRUE)
+    gsi_hat <- c(gsi_hat = predict(np_bw, Xtest)$mean)
+    beta_hat <- round(np_model$beta,3)
+    names(beta_hat) <- paste("beta", 1:4,sep = "_")
+    sd_hat <- round(diag(vcov(np_model)),3)
+    names(sd_hat) <- paste("sd", 1:4,sep = "_")
+
+    record_stats( c(method, func = func, beta_hat, sd_hat, rep = rep),
+                 title = paste(coef_doc_title, sep = "_") )
+
+    # record predictions
+    record_stats( round(cbind(Ztest, as.matrix( Xtest ), Ytest, Ztrue, Ytrue,
+                              sie_hat, gam_hat, gsi_hat, lm_hat, rep = rep),2),
+                 title = paste(pred_doc_title, func, sep = "_") )
+  
+  }
+
+  # end computations and start error report 
+    }, error = function(e) {
+
+      # printing error if occurred
+      record_stats( c(method, func, conditionMessage(e)),
+               title =  paste("ErrorReport_SIE_performance", sep = "_") )
+    }
+  # ending tryCatch
+  ) 
+# ending parallel processing 
+}
+close(pb)
+stopCluster(cluster)
+```
+
+
+
+

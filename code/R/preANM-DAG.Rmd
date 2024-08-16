@@ -1,0 +1,255 @@
+---
+title: "preANM-DAG"
+author: "Philip Boustani"
+date: "2024-07-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+# List of required packages
+packages <- c(
+  # "engression",
+  # "sn", # for simulating skewed normals
+  # "randomForest"
+  "mgcv", 
+  "grDevices"
+)
+
+# First, installing packages which are not yet installed and then loading all of them
+for (pkg in packages) {
+  if(!require(pkg, character.only = TRUE)){
+    install.packages(pkg, character.only = TRUE);
+    library(pkg, character.only = TRUE)
+  }
+}
+```
+
+
+
+```{r}
+lighten_color <- function(color, factor = 0.6) {
+  col <- col2rgb(color)
+  col <- col + (255 - col) * factor
+  rgb(col[1, ], col[2, ], col[3, ], maxColorValue = 255)
+}
+```
+
+
+
+```{r}
+n <- 10^3
+E <- rep(1:3, n)
+X_1 <- E + runif(n)
+X_2 <- sqrt(3*X_1 + runif(n))
+X_3 <- sqrt(2*X_1 + runif(n))
+index <- X_2 + X_3 + + runif(n)
+Y <- (index)^2
+```
+
+```{r}
+gam_YX <- gam(Y~s(X_2)+s(X_3))
+predicted <- gam_YX$fitted.values
+residuals <- gam_YX$residuals
+```
+
+
+```{r}
+# Lighten the colors
+colour_palet <- E
+colour_palet[E==1] <- "plum1"
+colour_palet[E==2] <- "paleturquoise2"
+colour_palet[E==3] <- "palegreen3"
+
+
+lightened_colors <- colour_palet # sapply(colour_palet, lighten_color, factor = 0.3)
+
+# specify export file name
+fig_name <- "preANM_residualpredicted_Y"
+
+# Specify export folder
+project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+figure_folder <- "writing/figures/"
+figure_dir <- paste(project_folder,figure_folder, sep = "" )
+
+# Open EPS device
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+           width = 5, height = 5, horizontal = FALSE)
+
+# Reduce space around plots
+par(mar = c(3, 3, 0.1, 0.1)) # default: par(mar = c(5.1, 4.1, 4.1, 2.1))   
+
+x_grid <- seq(15, 50, by = 5)
+x_range <- range(x_grid)
+y_grid <- seq(-8, 8, by = 4)
+y_range <- range(y_grid)
+
+plot(x = predicted, y = residuals, xlim = x_range, ylim = y_range, type = "n", 
+     xlab = "", ylab = "", xaxt = "n", yaxt = "n", bty = "n", ann = FALSE)
+
+axis(1, at = x_grid, labels = x_grid) 
+axis(2, at = y_grid)
+
+points(predicted, residuals, col = lightened_colors, pch = 16)
+
+segments(13, 0, 50, 0, lty = 3, lwd = 2)
+
+legend("bottomleft",
+       legend = c("(1)", "(2)", "(3)"),
+       pch = 16, 
+       col = unique(lightened_colors),
+       pt.cex = 1,
+       cex = 0.8, 
+       bty = "n", 
+       title = as.expression(bquote(bold("environment"))),
+       horiz = TRUE)
+
+mtext("predicted", side = 1, line = 2)
+mtext("residuals", side = 2, line = 2)
+
+dev.off()
+```
+
+
+
+```{r}
+inputmat <- as.matrix (cbind(X_1,X_2,X_3))
+nlicp <- nonlinearICP(X = inputmat, 
+             Y = as.matrix( Y ), 
+             environment = as.factor( E ),
+            condIndTest = InvariantResidualDistributionTest, argsCondIndTest = TRUE,
+            alpha = 0.05, varPreSelectionFunc = NULL,
+            argsVarPreSelectionFunc = NULL, maxSizeSets = ncol(inputmat),
+            condIndTestNames = NULL, speedUp = FALSE, subsampleSize = c(0.1, 0.25,
+            0.5, 0.75, 1), retrieveDefiningsSets = TRUE, seed = 1,
+            stopIfEmpty = TRUE, testAdditionalSet = NULL, verbose = FALSE)
+nlicp$retrievedCausalVars
+nlicp$definingSets
+```
+
+
+
+
+
+```{r}
+gam_Yinv <- gam(index~s(X_2)+s(X_3))
+predicted <- gam_Yinv$fitted.values
+residuals <- gam_Yinv$residuals
+plot(predicted, residuals, col = adjustcolor( E, alpha.f = 0.6), pch = 16)
+```
+
+
+```{r}
+# Lighten the colors
+# lightened_colors <- sapply(E, lighten_color, factor = 0.3)
+
+# specify export file name
+fig_name <- "preANM_residualpredicted_index"
+
+# Specify export folder
+project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+figure_folder <- "writing/figures/"
+figure_dir <- paste(project_folder,figure_folder, sep = "" )
+
+# Open EPS device
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+           width = 5, height = 5, horizontal = FALSE)
+
+# Reduce space around plots
+par(mar = c(3, 3, 0.1, 0.1)) # default: par(mar = c(5.1, 4.1, 4.1, 2.1))   
+
+x_grid <- seq(4, 7, by = 0.5)
+x_range <- range(x_grid)
+y_grid <- seq(-0.6, 0.6, by = 0.3)
+y_range <- range(y_grid)
+
+plot(x = predicted, y = residuals, xlim = c(3.8,7.5), ylim = y_range, type = "n", 
+     xlab = "", ylab = "", xaxt = "n", yaxt = "n", bty = "n", ann = FALSE)
+
+axis(1, at = x_grid, labels = x_grid) 
+axis(2, at = y_grid)
+
+points(predicted, residuals, col = lightened_colors, pch = 16)
+
+segments(3.5, 0, 7.2, 0, lty = 3, lwd = 2)
+
+legend("topright",
+       legend = c("(1)", "(2)", "(3)"),
+       pch = 16, 
+       col = unique(lightened_colors),
+       pt.cex = 1,
+       cex = 0.8, 
+       bty = "n", 
+       title = as.expression(bquote(bold("environment"))))
+
+mtext("predicted", side = 1, line = 2)
+mtext("residuals", side = 2, line = 2)
+dev.off()
+```
+
+
+```{r}
+inputmat <- as.matrix (cbind(X_1,X_2,X_3))
+nlicp <- nonlinearICP(X = inputmat, 
+             Y = as.matrix( index ), 
+             environment = as.factor( E ),
+            condIndTest = InvariantResidualDistributionTest, argsCondIndTest = TRUE,
+            alpha = 0.05, varPreSelectionFunc = NULL,
+            argsVarPreSelectionFunc = NULL, maxSizeSets = ncol(inputmat),
+            condIndTestNames = NULL, speedUp = FALSE, subsampleSize = c(0.1, 0.25,
+            0.5, 0.75, 1), retrieveDefiningsSets = TRUE, seed = 1,
+            stopIfEmpty = TRUE, testAdditionalSet = NULL, verbose = FALSE)
+nlicp$retrievedCausalVars
+nlicp$definingSets
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ------------------------------------------------------------------------------
+# ABLAGE 
+
+
+```{r}
+# plotting the predictions
+plot(index,Y)
+points(index,Yhat, col = "red",pch = 16)
+```
+

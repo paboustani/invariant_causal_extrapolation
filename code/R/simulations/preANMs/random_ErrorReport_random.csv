@@ -1,0 +1,4 @@
+"ID";"target";"eta_df";"multiplic";"shift";"epsilon_df";"meanshift";"strength";"F_id";"N";NA
+"n-552657";"Z_2";"3";"sum";"TRUE";"3";"0";"10";"square";"100";"invalid 'nrow' value (< 0)"
+"s-230050";"Z_1";"100";"sum";"TRUE";"100";"0.5";"1";"log";"100";"invalid 'nrow' value (< 0)"
+"a-970543";"Z_1";"3";"product";"FALSE";"3";"1";"0.1";"square";"200";"invalid 'nrow' value (< 0)"

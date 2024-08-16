@@ -1,0 +1,380 @@
+---
+title: "Jaccard_FWER_plots"
+author: "Philip Boustani"
+date: "2024-08-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+# List of required packages
+packages <- c(
+  "engression",
+  "CondIndTests", 
+  "lawstat", # For levene.test
+  "stats", # For ks.test, wilcox.test
+  "mgcv", # for fitting GAMs
+  "nonlinearICP",
+  "readtext", # loading csv files
+  # "utils", # progress bar 
+  "foreach",
+  "doSNOW",  # parallel processing with progress bar 
+  "data.tree", # to create tree structures from hierarchical data
+  "quantregForest", # quantile regression forest
+  # "InvariantCausalPrediction",
+  # "distributionsrd",
+  "torch"
+)
+
+# First, installing packages which are not yet installed and then loading all of them
+load_packages <- function(packages){
+  for (pkg in packages) {
+    if(!require(pkg, character.only = TRUE)){
+      install.packages(pkg, character.only = TRUE);
+      library(pkg, character.only = TRUE)
+    }
+  }
+}
+
+# loading packages
+load_packages(packages)
+```
+
+# load all required source files
+
+```{r}
+# List of required source files
+files <- c(
+)
+
+# if applicable, specify entire folders to be loaded
+folders <- c(
+  "gaussianEngression",
+  "engression_supplementary",
+  "external_modified"
+)
+
+# Detect working directory and load all files 
+load_files <- function(files, folders, directory){
+  
+  paths <- c(
+    file.path(directory, files),
+    file.path(directory, list.files(folders, full.names = TRUE))
+  )
+  
+  for (path in paths) {
+    source(path)
+  }
+}
+
+# loading directory  
+directory <- getwd()
+load_files(files, folders, directory)
+```
+
+
+
+
+
+
+Baselines: 
+
+  Random:
+  random_SimRep_random.csv
+  
+  linear ICP:
+  InvResDist_SimRep_linearICP.csv
+  
+  nonlinear ICP: 
+  Monotone_preSI_QPT_RDT_SimRep_GAM.csv
+
+
+Methods: 
+
+  fast linear ICE:
+  fastSIE_mon_preSI_SimRep_nonmonSIE.csv
+  
+  flinear ICE
+  nonfastSIE_mon_preSI_SimRep_nonmonPredSIE.csv
+  
+  nonlinear ICE:
+  Monotone_preSI_QPT_RDT_SimRep_engression.csv
+
+
+
+
+```{r}
+# Monotone_preSI_QPT_RDT_SimRep_engression.csv
+statistics <- read.csv("simulations/random_SimRep_random.csv", 
+                       header = TRUE, sep = ";", encoding="UTF-8")
+statistics <- statistics[statistics$eta_df <=10, ]
+statistics <- statistics[statistics$meanshift >=5, ]
+pvals <- statistics[ , grepl("pvSet_" , names( statistics ) ) ]
+```
+
+```{r}
+# Monotone_preSI_QPT_RDT_SimRep_engression.csv
+statistics <- read.csv("simulations/InvResDist_SimRep_linearICP.csv", 
+                       header = TRUE, sep = ";", encoding="UTF-8")
+statistics <- statistics[statistics$eta_df <=10, ]
+statistics <- statistics[statistics$meanshift >=5, ]
+pvals <- statistics[ , grepl("pvSet_" , names( statistics ) ) ]
+```
+
+```{r}
+# Monotone_preSI_QPT_RDT_SimRep_engression.csv
+statistics <- read.csv("simulations/Monotone_preSI_QPT_RDT_SimRep_GAM.csv", 
+                       header = TRUE, sep = ";", encoding="UTF-8")
+statistics <- statistics[statistics$eta_df <=10, ]
+statistics <- statistics[statistics$meanshift >=5, ]
+pvals <- statistics[ , grepl("pvSet_" , names( statistics ) ) ]
+```
+
+```{r}
+# Monotone_preSI_QPT_RDT_SimRep_engression.csv
+statistics <- read.csv("simulations/fastSIE_mon_preSI_SimRep_nonmonSIE.csv", 
+                       header = TRUE, sep = ";", encoding="UTF-8")
+statistics <- statistics[statistics$eta_df <=10, ]
+statistics <- statistics[statistics$meanshift >=5, ]
+pvals <- statistics[ , grepl("pvSet_" , names( statistics ) ) ]
+```
+
+```{r}
+# Monotone_preSI_QPT_RDT_SimRep_engression.csv
+statistics <- read.csv("simulations/nonfastSIE_mon_preSI_SimRep_nonmonPredSIE.csv", 
+                       header = TRUE, sep = ";", encoding="UTF-8")
+statistics <- statistics[statistics$eta_df <=10, ]
+statistics <- statistics[statistics$meanshift >=5, ]
+pvals <- statistics[ , grepl("pvSet_" , names( statistics ) ) ]
+```
+
+```{r}
+# Monotone_preSI_QPT_RDT_SimRep_engression.csv
+statistics <- read.csv("simulations/Monotone_preSI_QPT_RDT_SimRep_engression.csv", 
+                       header = TRUE, sep = ";", encoding="UTF-8")
+statistics <- statistics[statistics$eta_df <=10, ]
+statistics <- statistics[statistics$meanshift >=5, ]
+pvals <- statistics[ , grepl("pvSet_" , names( statistics ) ) ]
+```
+
+
+
+
+```{r}
+# Define a function to clean and convert the values
+clean_numeric <- function(x) {
+  x <- gsub(",", ".", x)  # Replace commas with periods
+  return(as.numeric(x))   # Convert to numeric
+}
+pvals <- as.data.frame(lapply(pvals, function(col) sapply(col, clean_numeric)))
+
+# clean data from missing rows
+NArows <- which(apply(pvals, 1, function(row) any(is.na(row))))
+pvals <- pvals[-NArows,]
+statistics <- statistics[-NArows,]
+```
+
+
+```{r}
+verbose <- FALSE 
+nvec <- nrow(pvals)
+AbsIntSetVec <- numeric(nvec)
+AbsUnSetVec <- numeric(nvec)
+S_in_PA <- numeric(nvec)
+int_set_vec <- character(nvec)
+
+for (Sim in 1:nvec) {
+  
+  if (verbose) cat("\n Sim:",Sim)
+  # extract target of the Simulation
+  target <- statistics[Sim,"target"]
+  if (verbose) cat("\n target:", target)
+  
+  # compute all possible combination of sets S for the extracted target in the DAG
+  S_sets <- obtain_S(target, d)
+  
+  # extract the true causal parents of the extracted target
+  parents <- get_parents(target,dag = dag)
+  if (length(parents)==0){
+    parents_no <- 0 
+  } else {
+    parents_no <- unlist( convertSetToNumeric(list(parents)) )
+  }
+  
+  # extract all the accepted sets S from the simulation for the target
+  accepted_sets <- get_accepted(pvals[Sim,], S_sets)
+  accepted_sets <- convertSetToNumeric(accepted_sets)
+  
+  # compute the defining set for all accepted Sets of a Simulation
+  # def_set <- computeDefiningSets(accepted_sets)
+  
+  # compute the intersecting set for all accepted Sets of a Simulation
+  int_set <- unlist( computeSetIntersection(accepted_sets) )
+  if (length(int_set)==0) int_set <- 0 
+  
+  if (verbose) cat("\n int_set:")
+  if (verbose)  print(int_set)
+  if (verbose) cat("\n parents_no:")
+  if (verbose) print(parents_no)
+  
+  # Computing the necessary quantities for Jaccard Similarity 
+  # hat{S}: defining set (estimate of causal parents)
+  # S^*: true causal parents 
+  
+  # 1) computing |hat{S} ∩ S^*|
+  # Intersection with Empty Set:
+  # https://proofwiki.org/wiki/Intersection_with_Empty_Set
+  
+  # 2) computing |hat{S} ∪ S^*|
+  # Union with Empty Set:
+  # https://proofwiki.org/wiki/Union_with_Empty_Set
+  
+  
+  if (length(parents_no) == 1 && parents_no == 0) {
+      if (length(int_set) == 1 && int_set == 0) {
+          AbsIntSetVec[Sim] <- AbsUnSetVec[Sim] <- 1
+      } else {
+          AbsIntSetVec[Sim] <- 0
+          AbsUnSetVec[Sim] <- length(int_set)
+      }
+  } else {
+      if (length(int_set) == 1 && int_set == 0) {
+          AbsIntSetVec[Sim] <- 0
+          AbsUnSetVec[Sim] <- length(parents_no)
+      } else {
+          AbsIntSetVec[Sim] <- length(computeSetIntersection(list(int_set, parents_no)))
+          AbsUnSetVec[Sim] <- length(get_union(list(parents_no, int_set)))
+      }
+  }
+    
+  if (verbose) cat("\n AbsIntSetVec[Sim]:")
+  if (verbose) print(AbsIntSetVec[Sim])
+  if (verbose) cat("\n AbsUnSetVec[Sim]:")
+  if (verbose) print(AbsUnSetVec[Sim])
+  
+  # compute I(S \in S^\star)
+  S_in_PA[Sim] <- is_subset(int_set, unlist(append(0, parents_no)) )
+}
+
+Jaccard <- AbsIntSetVec/ AbsUnSetVec
+
+statistics <- cbind(statistics, 
+                    "AbsIntSetVec" = AbsIntSetVec, 
+                    "AbsUnSetVec" = AbsUnSetVec, 
+                    "SinPA" = S_in_PA,
+                    "Jaccard" = Jaccard)
+
+FWER <- mean(1-S_in_PA); FWER
+Jaccard_mean <- mean(Jaccard, na.rm = TRUE); Jaccard_mean
+```
+
+# ---------------------------------------------------------------------------- #
+# STORE RESULTS
+# ---------------------------------------------------------------------------- #
+
+
+# Customize the methods row number before continuing
+```{r}
+row_no <- 6
+```
+
+# Store FWER and Jaccard Sim. in matrix
+```{r}
+if (!exists("statsMat")) {
+  statsMat <- matrix(NA, 6,2)
+  colnames(statsMat) <- c("FWER", "Jaccard_mean"); statsMat
+}
+
+statsMat[row_no,1] <- FWER 
+statsMat[row_no,2] <- Jaccard_mean 
+
+statsMat
+```
+
+
+# ---------------------------------------------------------------------------- #
+# CREATE PLOTS
+# ---------------------------------------------------------------------------- #
+
+```{r}
+# specify export file name
+fig_name <- "JACCARD_FWER_preANM_smalldf"
+# fig_name <- "JACCARD_FWER_preANM"
+
+# Specify export folder
+project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+figure_folder <- "writing/figures/"
+figure_dir <- paste(project_folder,figure_folder, sep = "" )
+
+# Open EPS device
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+           width = 5, height = 5, horizontal = FALSE)
+
+# Define your data and symbols
+x <- statsMat[,1]
+y <- statsMat[,2]
+
+# Calculate the range of x and y
+x_range <- seq(0, 0.09, by = 0.01)
+y_range <- seq(0.25, 0.45, by = 0.05)
+
+# Reduce space around plots
+par(mar = c(3, 3, 0.1, 0.1)) # default: par(mar = c(5.1, 4.1, 4.1, 2.1))   
+
+# Create empty plot 
+plot(x, y, xlim = range(x_range), ylim = range(y_range), type = "n", 
+     xlab = "", ylab = "", xaxt = "n", yaxt = "n", bty = "n", ann = FALSE)
+
+# Add axes
+axis(1, at = x_range) #, labels = sprintf("%.2f", seq(0, 0.3, by = 0.05))) # seq(0, 0.6, by = 0.05)
+axis(2, at = y_range)
+
+# Add vertical dotted line at x = 0.05
+# abline(, lty = 3, ylim = c(0, 1))
+segments(0.05, 0, 0.05, 1, lty = 3)
+
+# plotting the observations 
+# Point characters: 
+# http://www.sthda.com/english/wiki/r-plot-pch-symbols-the-different-point-shapes-available-in-r
+
+color_vec <- c("pink", "darkseagreen1", "burlywood", "dodgerblue4", "darkorange", "magenta")
+pch_vec <- c(22, 2, 11, 12, 8, 4)
+  # 1st observation: filled pink square
+  points(x[1], y[1], pch = pch_vec[1], col = color_vec[1] , bg = color_vec[1], cex = 2)
+  # 2nd observation: green star
+  points(x[2], y[2], pch = pch_vec[2], col = color_vec[2], cex = 1.5, lwd=3.4)
+  # 2nd observation: green star
+  points(x[3], y[3], pch = pch_vec[3], col =color_vec[3] , cex = 1.5, lwd=3.4)
+  
+  points(x[4], y[4], pch = pch_vec[4], col = color_vec[4], cex = 1.5, lwd=3.4)
+  
+  points(x[5], y[5], pch = pch_vec[5], col = color_vec[5], cex = 1.5, lwd=3.4)
+  
+  points(x[6], y[6], pch = pch_vec[6], col = color_vec[6], cex = 1.5, lwd=3.4)
+
+# Add legend
+legend("topleft",
+       legend = c("random", "linear ICP", "nonlinear ICP", 
+                  "fast linear ICE", "linear ICE", "nonlinear ICE"),
+       # legend = c("GAM & RDT", "sI-Engression & QPT", "RF & QPT"),
+       pch = pch_vec, 
+       col = color_vec,
+       pt.bg = color_vec, 
+       pt.cex = 1,
+       cex = 1, bty = "n", 
+       title = as.expression(bquote(bold("method"))) )
+
+
+# Add axis labels
+mtext("FWER", side = 1, line = 2)
+mtext("JACCARD SIMILARITY", side = 2, line = 2)
+
+# Close EPS device
+dev.off()
+
+```

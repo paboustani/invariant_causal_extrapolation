@@ -1,0 +1,6 @@
+"ID";"target";"eta_df";"multiplic";"shift";"epsilon_df";"meanshift";"strength";"F_id";"N";NA
+"i-333139";"Z_6";"5";"sum";"TRUE";"5";"0.2";"10";"cubic";"5000";"Vektorgröße kann nicht NA sein"
+"k-450624";"Z_4";"2";"product";"FALSE";"2";"2";"10";"softplus";"2000";"Fehlender Wert, wo TRUE/FALSE nötig ist"
+"z-733904";"Z_2";"2";"sum";"TRUE";"2";"5";"10";"softplus";"500";"Fehlender Wert, wo TRUE/FALSE nötig ist"
+"o-688937";"Z_6";"2";"product";"TRUE";"2";"5";"5";"cubic";"500";"Vektorgröße kann nicht NA sein"
+"q-452205";"Z_1";"100";"sum";"TRUE";"100";"0.2";"0.1";"cubic";"100";"'x' muss mindestens 2 Zeilen und Spalten haben"

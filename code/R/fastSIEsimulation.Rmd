@@ -1,0 +1,499 @@
+---
+title: "fastSIEsimulation"
+author: "Philip Boustani"
+date: "2024-08-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# install and loed packages
+
+```{r}
+# List of required packages
+packages <- c(
+  "engression",
+  "CondIndTests", 
+  "lawstat", # For levene.test
+  "stats", # For ks.test, wilcox.test
+  "mgcv", # for fitting GAMs
+  "nonlinearICP",
+  "readtext", # loading csv files
+  # "utils", # progress bar 
+  "foreach",
+  "doSNOW",  # parallel processing with progress bar 
+  "data.tree", # to create tree structures from hierarchical data
+  "quantregForest", # quantile regression forest
+  # "InvariantCausalPrediction",
+  # "distributionsrd",
+  "torch", 
+  "DescTools"
+)
+
+# First, installing packages which are not yet installed and then loading all of them
+load_packages <- function(packages){
+  for (pkg in packages) {
+    if(!require(pkg, character.only = TRUE)){
+      install.packages(pkg, character.only = TRUE);
+      library(pkg, character.only = TRUE)
+    }
+  }
+}
+
+# loading packages
+load_packages(packages)
+```
+
+# load all required source files
+
+```{r}
+# List of required source files
+files <- c(
+)
+
+# if applicable, specify entire folders to be loaded
+folders <- c(
+  "gaussianEngression",
+  "engression_supplementary",
+  "external_modified"
+)
+
+# Detect working directory and load all files 
+load_files <- function(files, folders, directory){
+  
+  paths <- c(
+    file.path(directory, files),
+    file.path(directory, list.files(folders, full.names = TRUE))
+  )
+  
+  for (path in paths) {
+    source(path)
+  }
+}
+
+# loading directory  
+directory <- getwd()
+load_files(files, folders, directory)
+```
+
+
+
+# FAST ICE SIMULATION ----------------------------------------------------------
+
+
+```{r}
+# Set up simulation settings
+n <- 5000 # \in (100, 200, 500, 2000, 5000)
+num_epochs <- 100
+SimRep <- 120
+test <- "fastSIE_mon_preSI"
+
+# Set up parallel computing
+cluster <- makeSOCKcluster(3)
+registerDoSNOW(cluster)
+
+# setting up progress bar
+pb <- txtProgressBar(max=SimRep, style=3)
+progress <- function(n) setTxtProgressBar(pb, n)
+opts <- list(progress=progress)
+
+# Starting parallel processing unit
+foreach(rep = 1:SimRep,
+        .errorhandling = 'pass',
+        .combine=rbind,
+        .options.snow = opts ) %dopar% {
+          
+  # loading all packages into cores
+  load_packages(packages)
+  # loading source files into cores
+  load_files(files, folders, directory) 
+
+  # Setting up framework for error message printing
+  tryCatch(
+  # Start Computations
+    {
+      method <- "nonmonSIE"
+      
+      Simulation <- gen_sample(n = n, d = d, dag = dag,
+                  signs = dag_signs, betas = dag_coefs, target = "random",
+                  verbose = FALSE , preSI = TRUE, monotone_fun = TRUE)
+
+      target <- Simulation$statistics[2]
+      S_sets <- obtain_S(target, d)
+      pvals <- rep(NA, length(S_sets))
+      names(pvals) <- paste("pvSet",1:length(S_sets),sep = "_")
+      
+      Xinput <- as.matrix(Simulation$sample[,!(colnames(Simulation$sample) %in% c(target, "E"))])
+      
+      sie_out <- SIE( X = Xinput,
+                      Y = Simulation$sample[,target],
+                      noise_dim = 5,
+                      hidden_dim = 100,
+                      num_layer = 3,
+                      dropout = 0.05,
+                      batch_norm = TRUE,
+                      num_epochs = 100,
+                      lr = 10^(-3),
+                      beta = 1,
+                      silent = TRUE,
+                      standardize = TRUE,
+                      GSI_rep = 1, 
+                      quantiles = NULL, 
+                      return_index = TRUE, 
+                      mean_prediction = FALSE, 
+                      test_data = NULL,
+                      verbose = FALSE,
+                      icp_test = NULL,
+                      E = NULL, 
+                      shapiro = FALSE,
+                      init_method = "gaussian_quantile", 
+                      return_yinv = TRUE, 
+                      monotone = FALSE)
+      yinv_hat <- sie_out$yinv
+    
+      for (k in 1:length(S_sets)) {
+    
+        S_k <- S_sets[[k]]
+        Xinput <- as.matrix(Simulation$sample[,S_k])
+        colnames(Xinput) <- S_k
+        
+        lmfit <- lm(yinv_hat ~ Xinput)
+        
+        pvals[k] <- round(leveneAndWilcoxResidualDistributions(Y = yinv_hat,  
+                                                           predicted = lmfit$fitted.values, 
+                                                           E = as.factor(Simulation$sample[,"E"]), 
+                                                           verbose=FALSE)$pvalue,4)
+        
+        # Record Beta Coefficients:
+        # beta_hat <- round(summary(lmfit)$coefficients[-1, 1],3)
+        # sd_hat <- round(summary(lmfit)$coefficients[-1, 2],3)
+        # 
+        # record_stats(c(ID = Simulation$statistics[1], set = k, pvalue = pvals[k], 
+        #                beta_hat, sd_hat),
+        #            title = paste(test, "BetaDoc", method, sep = "_") )
+      }
+      
+      # record computations
+      record_stats( c(Simulation$statistics, pvals),
+                   title = paste(test, "SimRep", method, sep = "_") )
+      record_stats(Simulation$documentation,
+                   title = paste(test, "IntDoc", method, sep = "_") )
+
+      
+    # end computations and start error report 
+    }, error = function(e) {
+
+      # printing error if occurred
+      record_stats( c(Simulation$statistics, conditionMessage(e)),
+               title =  paste(test, "ErrorReport", method, sep = "_") )
+    }
+  # ending tryCatch
+  ) 
+# ending parallel processing 
+}
+
+
+close(pb)
+stopCluster(cluster)
+```
+
+
+
+
+
+
+
+```{r}
+# Set up simulation settings
+n <- 500 # \in (100, 200, 500, 2000, 5000)
+# for (n in c(100, 200, 500, 2000, 5000)) {
+
+num_epochs <- 100
+SimRep <- 60
+test <- "nonfastSIE_mon_preSI"
+
+# Set up parallel computing
+cluster <- makeSOCKcluster(3)
+registerDoSNOW(cluster)
+
+# setting up progress bar
+pb <- txtProgressBar(max=SimRep, style=3)
+progress <- function(n) setTxtProgressBar(pb, n)
+opts <- list(progress=progress)
+
+# Starting parallel processing unit
+foreach(rep = 1:SimRep,
+        .errorhandling = 'pass',
+        .combine=rbind,
+        .options.snow = opts ) %dopar% {
+          
+  # loading all packages into cores
+  load_packages(packages)
+  # loading source files into cores
+  load_files(files, folders, directory) 
+
+  # Setting up framework for error message printing
+  tryCatch(
+  # Start Computations
+    {
+      method <- "nonmonPredSIE"
+      
+      Simulation <- gen_sample(n = n, d = d, dag = dag,
+                  signs = dag_signs, betas = dag_coefs, target = "random",
+                  verbose = FALSE , preSI = TRUE, monotone_fun = TRUE)
+
+      target <- Simulation$statistics[2]
+      S_sets <- obtain_S(target, d)
+      pvals <- rep(NA, length(S_sets))
+      names(pvals) <- paste("pvSet",1:length(S_sets),sep = "_")
+      
+      # Xinput <- as.matrix(Simulation$sample[,!(colnames(Simulation$sample) %in% c(target, "E"))])
+      
+      
+    
+      for (k in 1:length(S_sets)) {
+    
+        S_k <- S_sets[[k]]
+        Xinput <- as.matrix(Simulation$sample[,S_k])
+        colnames(Xinput) <- S_k
+        
+        sie_out <- SIE( X = Xinput,
+                      Y = Simulation$sample[,target],
+                      noise_dim = 5,
+                      hidden_dim = 100,
+                      num_layer = 3,
+                      dropout = 0.05,
+                      batch_norm = TRUE,
+                      num_epochs = 100,
+                      lr = 10^(-3),
+                      beta = 1,
+                      silent = TRUE,
+                      standardize = TRUE,
+                      GSI_rep = 1, 
+                      quantiles = NULL, 
+                      return_index = FALSE, 
+                      predict_from_index = NULL,
+                      mean_prediction = FALSE, 
+                      test_data = NULL,
+                      verbose = FALSE,
+                      icp_test = NULL,
+                      E = NULL, 
+                      shapiro = FALSE,
+                      init_method = "gaussian_quantile", 
+                      return_yinv = TRUE, 
+                      monotone = FALSE)
+        yinv_hat <- sie_out$yinv
+        
+        lmfit <- lm(yinv_hat ~ Xinput)
+        
+        pvals[k] <- round(leveneAndWilcoxResidualDistributions(Y = yinv_hat,  
+                                                           predicted = lmfit$fitted.values, 
+                                                           E = as.factor(Simulation$sample[,"E"]), 
+                                                           verbose=FALSE)$pvalue,4)
+        
+        # Record Beta Coefficients:
+        # beta_hat <- round(summary(lmfit)$coefficients[-1, 1],3)
+        # sd_hat <- round(summary(lmfit)$coefficients[-1, 2],3)
+        # 
+        # record_stats(c(ID = Simulation$statistics[1], set = k, pvalue = pvals[k], 
+        #                beta_hat, sd_hat),
+        #            title = paste(test, "BetaDoc", method, sep = "_") )
+      }
+      
+      # record computations
+      record_stats( c(Simulation$statistics, pvals),
+                   title = paste(test, "SimRep", method, sep = "_") )
+      record_stats(Simulation$documentation,
+                   title = paste(test, "IntDoc", method, sep = "_") )
+
+      
+    # end computations and start error report 
+    }, error = function(e) {
+
+      # printing error if occurred
+      record_stats( c(Simulation$statistics, conditionMessage(e)),
+               title =  paste(test, "ErrorReport", method, sep = "_") )
+    }
+  # ending tryCatch
+  ) 
+# ending parallel processing 
+}
+close(pb)
+stopCluster(cluster)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# EVALUATE ---------------------------------------------------------------------
+
+# OLD DATA LOAD 
+
+```{r}
+directory <- getwd()
+method <- "SIengressionQPT"
+# method <- "SimRep_GSIengression"
+
+# Tests: 
+# 1) InvResDisTest_SimRep
+# 2) InvConQuanPred_SimRep
+# 3) InvResDisTest_preSI
+# 3) InvConQuanPred_preSI
+
+# title <- paste("simulation_documentation/InvResDisTest_SimRep", method, sep = "_")
+title <- paste("InvConQuanPred_preSI", method, sep = "_")
+impdir = directory
+fileform = "csv"
+delim = ";"
+filename <- paste(impdir, "/", title, ".", fileform, sep = "")
+```
+
+
+# NEW DATA LOAD 
+
+```{r}
+docname <- "fastSIE_mon_preSI_SimRep_nonmonPredSIE.csv"
+statistics <- read.csv(docname, 
+                       header = TRUE, sep = ";", encoding="UTF-8")
+pvals <- statistics[ , grepl("pvSet_" , names( statistics ) ) ]
+```
+
+```{r}
+# Define a function to clean and convert the values
+clean_numeric <- function(x) {
+  x <- gsub(",", ".", x)  # Replace commas with periods
+  return(as.numeric(x))   # Convert to numeric
+}
+pvals <- as.data.frame(lapply(pvals, function(col) sapply(col, clean_numeric)))
+
+# clean data from missing rows
+NArows <- which(apply(pvals, 1, function(row) any(is.na(row))))
+pvals <- pvals[-NArows,]
+statistics <- statistics[-NArows,]
+```
+
+
+```{r}
+verbose <- FALSE 
+nvec <- nrow(pvals)
+AbsIntSetVec <- numeric(nvec)
+AbsUnSetVec <- numeric(nvec)
+S_in_PA <- numeric(nvec)
+int_set_vec <- character(nvec)
+
+for (Sim in 1:nvec) {
+  
+  if (verbose) cat("\n Sim:",Sim)
+  # extract target of the Simulation
+  target <- statistics[Sim,"target"]
+  if (verbose) cat("\n target:", target)
+  
+  # compute all possible combination of sets S for the extracted target in the DAG
+  S_sets <- obtain_S(target, d)
+  
+  # extract the true causal parents of the extracted target
+  parents <- get_parents(target,dag = dag)
+  if (length(parents)==0){
+    parents_no <- 0 
+  } else {
+    parents_no <- unlist( convertSetToNumeric(list(parents)) )
+  }
+  
+  # extract all the accepted sets S from the simulation for the target
+  accepted_sets <- get_accepted(pvals[Sim,], S_sets)
+  accepted_sets <- convertSetToNumeric(accepted_sets)
+  
+  # compute the defining set for all accepted Sets of a Simulation
+  # def_set <- computeDefiningSets(accepted_sets)
+  
+  # compute the intersecting set for all accepted Sets of a Simulation
+  int_set <- unlist( computeSetIntersection(accepted_sets) )
+  if (length(int_set)==0) int_set <- 0 
+  
+  if (verbose) cat("\n int_set:")
+  if (verbose)  print(int_set)
+  if (verbose) cat("\n parents_no:")
+  if (verbose) print(parents_no)
+  
+  # Computing the necessary quantities for Jaccard Similarity 
+  # hat{S}: defining set (estimate of causal parents)
+  # S^*: true causal parents 
+  
+  # 1) computing |hat{S} ∩ S^*|
+  # Intersection with Empty Set:
+  # https://proofwiki.org/wiki/Intersection_with_Empty_Set
+  
+  # 2) computing |hat{S} ∪ S^*|
+  # Union with Empty Set:
+  # https://proofwiki.org/wiki/Union_with_Empty_Set
+  
+  
+  if (length(parents_no) == 1 && parents_no == 0) {
+      if (length(int_set) == 1 && int_set == 0) {
+          AbsIntSetVec[Sim] <- AbsUnSetVec[Sim] <- 1
+      } else {
+          AbsIntSetVec[Sim] <- 0
+          AbsUnSetVec[Sim] <- length(int_set)
+      }
+  } else {
+      if (length(int_set) == 1 && int_set == 0) {
+          AbsIntSetVec[Sim] <- 0
+          AbsUnSetVec[Sim] <- length(parents_no)
+      } else {
+          AbsIntSetVec[Sim] <- length(computeSetIntersection(list(int_set, parents_no)))
+          AbsUnSetVec[Sim] <- length(get_union(list(parents_no, int_set)))
+      }
+  }
+    
+  if (verbose) cat("\n AbsIntSetVec[Sim]:")
+  if (verbose) print(AbsIntSetVec[Sim])
+  if (verbose) cat("\n AbsUnSetVec[Sim]:")
+  if (verbose) print(AbsUnSetVec[Sim])
+  
+  # compute I(S \in S^\star)
+  S_in_PA[Sim] <- is_subset(int_set, unlist(append(0, parents_no)) )
+}
+
+Jaccard <- AbsIntSetVec/ AbsUnSetVec
+
+statistics <- cbind(statistics, 
+                    "AbsIntSetVec" = AbsIntSetVec, 
+                    "AbsUnSetVec" = AbsUnSetVec, 
+                    "SinPA" = S_in_PA,
+                    "Jaccard" = Jaccard)
+
+FWER <- mean(1-S_in_PA); FWER
+Jaccard_mean <- mean(Jaccard, na.rm = TRUE); Jaccard_mean
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,1083 @@
+---
+title: "engression_worksheet"
+author: "Philip Boustani"
+date: "2024-03-24"
+output: html_document
+---
+
+# Setup Rmarkdown
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# install and loed packages
+
+```{r}
+# List of required packages
+packages <- c(
+  "engression",
+  "CondIndTests", 
+  "lawstat", # For levene.test
+  "stats", # For ks.test, wilcox.test
+  "mgcv", # for fitting GAMs
+  "nonlinearICP",
+  "readtext", # loading csv files
+  # "utils", # progress bar 
+  "foreach",
+  "doSNOW",  # parallel processing with progress bar 
+  "data.tree", # to create tree structures from hierarchical data
+  "quantregForest", # quantile regression forest
+  # "InvariantCausalPrediction",
+  # "distributionsrd",
+  "torch"
+)
+
+# First, installing packages which are not yet installed and then loading all of them
+load_packages <- function(packages){
+  for (pkg in packages) {
+    if(!require(pkg, character.only = TRUE)){
+      install.packages(pkg, character.only = TRUE);
+      library(pkg, character.only = TRUE)
+    }
+  }
+}
+
+# loading packages
+load_packages(packages)
+```
+
+# load all required source files
+
+```{r}
+# List of required source files
+files <- c(
+)
+
+# if applicable, specify entire folders to be loaded
+folders <- c(
+  "gaussianEngression",
+  "engression_supplementary",
+  "external_modified"
+)
+
+# Detect working directory and load all files 
+load_files <- function(files, folders, directory){
+  
+  paths <- c(
+    file.path(directory, files),
+    file.path(directory, list.files(folders, full.names = TRUE))
+  )
+  
+  for (path in paths) {
+    source(path)
+  }
+}
+
+# loading directory  
+directory <- getwd()
+load_files(files, folders, directory)
+```
+
+
+
+# PART 1 -----------------------------------------------------------------------
+# INV. RESIDUAL DISTRIBUTION TEST 
+
+# Simulate data and compute p-vals.
+
+```{r}
+n <- 2000 # \in (100, 200, 500, 2000, 5000)
+SimRep <- 100
+method <- "GAM"
+test <- "InvResDist"
+
+# Set up parallel computing
+cluster <- makeSOCKcluster(3)
+registerDoSNOW(cluster)
+
+# setting up progress bar
+pb <- txtProgressBar(max=SimRep, style=3)
+progress <- function(n) setTxtProgressBar(pb, n)
+opts <- list(progress=progress)
+
+# Starting parallel processing unit
+foreach(rep = 1:SimRep,
+        .errorhandling = 'pass',
+        .combine=rbind,
+        .options.snow = opts ) %dopar% { # for(rep in 1:SimRep)
+          
+  # loading all packages into cores
+  load_packages(packages)
+  # loading source files into cores
+  load_files(files, folders, directory) 
+
+  # Setting up framework for error message printing
+  tryCatch(
+  # Start Computations
+    {
+
+  Simulation <- gen_sample(n = n, d = d, dag = dag,
+                  signs = dag_signs, betas = dag_coefs, target = "random",
+                  verbose = FALSE , preSI = TRUE)
+
+  target <- Simulation$statistics[2]
+  S_sets <- obtain_S(target, d)
+  pvals <- rep(NA, length(S_sets))
+  names(pvals) <- paste("pvSet",1:length(S_sets),sep = "_")
+
+  for (k in 1:length(S_sets)) {
+
+    S_k <- S_sets[[k]]
+
+    pvals[k] <- InvResDisTest(
+      Y = Simulation$sample[,target], 
+      E = as.factor(Simulation$sample[,"E"]),
+      X = Simulation$sample[,S_k],
+      alpha = 0.05,
+      verbose = FALSE, fitmodel = method,
+      test = leveneAndWilcoxResidualDistributions, colNameNoSmooth = NULL,
+      mtry = sqrt(NCOL(X)), ntree = 100, nodesize = 5, maxnodes = NULL,
+      noise_dim = 5,
+      hidden_dim = 100,
+      num_layer = 3,
+      num_epochs = 30, # default set to 1000
+      silent = TRUE,
+      returnModel = FALSE
+    )$pvalue
+  }
+
+  record_stats( c(Simulation$statistics, round(pvals,4)),
+               title = paste(test, "SimRep_preSI", method, sep = "_") )
+  record_stats(Simulation$documentation,
+               title = paste(test, "IntDoc_preSI", method, sep = "_") )
+  
+
+  # end computations and start error report 
+    }, error = function(e) {
+
+      # printing error if occurred
+      record_stats( c(Simulation$statistics, conditionMessage(e)),
+               title =  paste(test, "ErrorReport_preSI", method, sep = "_") )
+    }
+  # ending tryCatch
+  ) 
+# ending parallel processing 
+}
+
+
+close(pb)
+stopCluster(cluster)
+```
+
+
+
+# ---------------------------------------------------------------------------- #
+# PART 2
+# INV. RESIDUAL DISTRIBUTION TEST 
+# ---------------------------------------------------------------------------- #
+
+
+```{r}
+# Set up simulation settings
+n <- 50 # \in (100, 200, 500, 2000, 5000)
+SimRep <- 10
+num_epochs <- 10
+test <- "InvResDisTest_preSI"
+
+# Set up parallel computing
+cluster <- makeSOCKcluster(3)
+registerDoSNOW(cluster)
+
+# setting up progress bar
+pb <- txtProgressBar(max=SimRep, style=3)
+progress <- function(n) setTxtProgressBar(pb, n)
+opts <- list(progress=progress)
+
+# Starting parallel processing unit
+foreach(rep = 1:SimRep,
+        .errorhandling = 'pass',
+        .combine=rbind,
+        .options.snow = opts ) %dopar% { # for(rep in 1:SimRep)
+          
+  # loading all packages into cores
+  load_packages(packages)
+  # loading source files into cores
+  load_files(files, folders, directory) 
+
+  # Setting up framework for error message printing
+  tryCatch(
+  # Start Computations
+    {
+  
+      Simulation <- gen_sample(n = n, d = d, dag = dag,
+                  signs = dag_signs, betas = dag_coefs, target = "random",
+                  verbose = FALSE , preSI = TRUE)
+
+      target <- Simulation$statistics[2]
+      S_sets <- obtain_S(target, d)
+      pvals <- rep(NA, length(S_sets))
+      names(pvals) <- paste("pvSet",1:length(S_sets),sep = "_")
+      
+      
+      method <- "GSIengression" # \in (GAM, engression, GSIengression)
+    
+      for (k in 1:length(S_sets)) {
+    
+        S_k <- S_sets[[k]]
+        Xinput <- as.matrix(Simulation$sample[,S_k])
+        colnames(Xinput) <- S_k
+          
+        # InvResDisTest
+        result <- InvResDisTest(
+          Y = Simulation$sample[,target],
+          E = as.factor(Simulation$sample[,"E"]),
+          X = Xinput,
+          alpha = 0.05,
+          verbose = FALSE, fitmodel = method,
+          test = leveneAndWilcoxResidualDistributions, colNameNoSmooth = NULL,
+          mtry = sqrt(NCOL(Xinput)), ntree = 100, nodesize = 5, maxnodes = NULL,
+          noise_dim = 5,
+          hidden_dim = 100,
+          num_layer = 3,
+          num_epochs = num_epochs, # default set to 1000
+          silent = TRUE,
+          returnModel = FALSE
+        )
+        
+        pvals[k] <- result$pvalue
+        
+        record_stats(c(ID = Simulation$statistics[1], set = k, pvalue = round(pvals[k],4), 
+                       result$beta_hat, result$sd_hat),
+                   title = paste(test, "BetaDoc", method, sep = "_") )
+      }
+      
+      # record computations
+      record_stats( c(Simulation$statistics, round(pvals,4)),
+                   title = paste(test, "SimRep", method, sep = "_") )
+      record_stats(Simulation$documentation,
+                   title = paste(test, "IntDoc", method, sep = "_") )
+
+        
+      method <- "GAM" # \in (GAM, engression, GSIengression)
+      
+      for (k in 1:length(S_sets)) {
+    
+        S_k <- S_sets[[k]]
+        Xinput <- as.matrix(Simulation$sample[,S_k])
+        colnames(Xinput) <- S_k
+        
+        # InvResDisTest
+        result <- InvResDisTest(
+          Y = Simulation$sample[,target],
+          E = as.factor(Simulation$sample[,"E"]),
+          X = Xinput,
+          alpha = 0.05,
+          verbose = FALSE, fitmodel = method,
+          test = leveneAndWilcoxResidualDistributions, colNameNoSmooth = NULL,
+          mtry = sqrt(NCOL(Xinput)), ntree = 100, nodesize = 5, maxnodes = NULL,
+          noise_dim = 5,
+          hidden_dim = 100,
+          num_layer = 3,
+          num_epochs = num_epochs, # default set to 1000
+          silent = TRUE,
+          returnModel = FALSE
+        )
+        
+        pvals[k] <- result$pvalue
+      }
+      
+      # record computations
+      record_stats( c(Simulation$statistics, round(pvals,4)),
+                   title = paste(test, "SimRep", method, sep = "_") )
+      record_stats(Simulation$documentation,
+                   title = paste(test, "IntDoc", method, sep = "_") )
+      
+      
+    # end computations and start error report 
+    }, error = function(e) {
+
+      # printing error if occurred
+      record_stats( c(Simulation$statistics, conditionMessage(e)),
+               title =  paste(test, "ErrorReport", method, sep = "_") )
+    }
+  # ending tryCatch
+  ) 
+# ending parallel processing 
+}
+
+
+close(pb)
+stopCluster(cluster)
+```
+
+
+
+# ---------------------------------------------------------------------------- #
+# Invariant Conditional Quantile Prediction
+# ---------------------------------------------------------------------------- #
+
+
+```{r}
+# Set up simulation settings
+n <- 5000 # \in (100, 200, 500, 2000, 5000)
+num_epochs <- 100
+SimRep <- 53
+test <- "InvConQuanPred_preSI"
+
+# Set up parallel computing
+cluster <- makeSOCKcluster(3)
+registerDoSNOW(cluster)
+
+# setting up progress bar
+pb <- txtProgressBar(max=SimRep, style=3)
+progress <- function(n) setTxtProgressBar(pb, n)
+opts <- list(progress=progress)
+
+# Starting parallel processing unit
+foreach(rep = 1:SimRep,
+        .errorhandling = 'pass',
+        .combine=rbind,
+        .options.snow = opts ) %dopar% {
+          
+  # loading all packages into cores
+  load_packages(packages)
+  # loading source files into cores
+  load_files(files, folders, directory) 
+
+  # Setting up framework for error message printing
+  tryCatch(
+  # Start Computations
+    {
+      method <- "SIE"
+      
+      Simulation <- gen_sample(n = n, d = d, dag = dag,
+                  signs = dag_signs, betas = dag_coefs, target = "random",
+                  verbose = FALSE , preSI = TRUE)
+
+      target <- Simulation$statistics[2]
+      S_sets <- obtain_S(target, d)
+      pvals <- rep(NA, length(S_sets))
+      names(pvals) <- paste("pvSet",1:length(S_sets),sep = "_")
+    
+      for (k in 1:length(S_sets)) {
+    
+        S_k <- S_sets[[k]]
+        Xinput <- as.matrix(Simulation$sample[,S_k])
+        colnames(Xinput) <- S_k
+        
+        result <- InvariantConditionalQuantilePrediction(
+                        Y = Simulation$sample[,target],
+                        E = as.factor(Simulation$sample[,"E"]),
+                        X = Xinput,
+                        fitmodel = method, # also: RF, engression
+                        alpha = 0.05,
+                        verbose = FALSE,
+                        test = fishersTestExceedance,
+                        mtry = sqrt(NCOL(Xinput)),
+                        ntree = 100,
+                        nodesize = 5,
+                        maxnodes = NULL,
+                        quantiles = c(0.1, 0.5, 0.9),
+                        returnModel = FALSE, 
+                        noise_dim = 5, # engression specifications
+                        hidden_dim = 100,
+                        num_layer = 3,
+                        dropout = 0.05,
+                        batch_norm = TRUE,
+                        num_epochs = num_epochs,
+                        lr = 10^(-3),
+                        beta = 1,
+                        silent = TRUE,
+                        standardize = TRUE)
+        
+        pvals[k] <- result$pvalue
+        
+        record_stats(c(ID = Simulation$statistics[1], set = k, pvalue = round(pvals[k],4), 
+                       result$beta_hat, result$sd_hat),
+                   title = paste(test, "BetaDoc", method, sep = "_") )
+      }
+      
+      # record computations
+      record_stats( c(Simulation$statistics, round(pvals,4)),
+                   title = paste(test, "SimRep", method, sep = "_") )
+      record_stats(Simulation$documentation,
+                   title = paste(test, "IntDoc", method, sep = "_") )
+
+      method <- "RF"
+      
+      for (k in 1:length(S_sets)) {
+    
+        S_k <- S_sets[[k]]
+        Xinput <- as.matrix(Simulation$sample[,S_k])
+        colnames(Xinput) <- S_k
+        
+        result <- InvariantConditionalQuantilePrediction(
+                        Y = Simulation$sample[,target],
+                        E = as.factor(Simulation$sample[,"E"]),
+                        X = Xinput,
+                        fitmodel = method, # also: engression, SIE
+                        alpha = 0.05,
+                        verbose = FALSE,
+                        test = fishersTestExceedance,
+                        mtry = sqrt(NCOL(Xinput)),
+                        ntree = 100,
+                        nodesize = 5,
+                        maxnodes = NULL,
+                        quantiles = c(0.1, 0.5, 0.9),
+                        returnModel = FALSE, 
+                        noise_dim = 5, # engression specifications
+                        hidden_dim = 100,
+                        num_layer = 3,
+                        dropout = 0.05,
+                        batch_norm = TRUE,
+                        num_epochs = num_epochs,
+                        lr = 10^(-3),
+                        beta = 1,
+                        silent = TRUE,
+                        standardize = TRUE)
+        
+        pvals[k] <- result$pvalue
+      }
+
+      # record computations
+      record_stats( c(Simulation$statistics, round(pvals,4)),
+                   title = paste(test, "SimRep", method, sep = "_") )
+      record_stats(Simulation$documentation,
+                   title = paste(test, "IntDoc", method, sep = "_") )
+      
+    # end computations and start error report 
+    }, error = function(e) {
+
+      # printing error if occurred
+      record_stats( c(Simulation$statistics, conditionMessage(e)),
+               title =  paste(test, "ErrorReport", method, sep = "_") )
+    }
+  # ending tryCatch
+  ) 
+# ending parallel processing 
+}
+
+
+close(pb)
+stopCluster(cluster)
+```
+
+
+
+
+```{r}
+# Set up simulation settings
+n <- 100 # \in (100, 200, 500, 2000, 5000)
+num_epochs <- 100
+SimRep <- 50
+test <- "Monotone_preSI_QPT_RDT"
+
+# Set up parallel computing
+cluster <- makeSOCKcluster(3)
+registerDoSNOW(cluster)
+
+# setting up progress bar
+pb <- txtProgressBar(max=SimRep, style=3)
+progress <- function(n) setTxtProgressBar(pb, n)
+opts <- list(progress=progress)
+
+# Starting parallel processing unit
+foreach(rep = 1:SimRep,
+        .errorhandling = 'pass',
+        .combine=rbind,
+        .options.snow = opts ) %dopar% {
+          
+  # loading all packages into cores
+  load_packages(packages)
+  # loading source files into cores
+  load_files(files, folders, directory) 
+
+  # Setting up framework for error message printing
+  tryCatch(
+  # Start Computations
+    {
+      method <- "engression"
+      
+      Simulation <- gen_sample(n = n, d = d, dag = dag,
+                  signs = dag_signs, betas = dag_coefs, target = "random",
+                  verbose = FALSE , preSI = TRUE, monotone_fun = TRUE)
+
+      target <- Simulation$statistics[2]
+      S_sets <- obtain_S(target, d)
+      pvals <- rep(NA, length(S_sets))
+      names(pvals) <- paste("pvSet",1:length(S_sets),sep = "_")
+    
+      for (k in 1:length(S_sets)) {
+    
+        S_k <- S_sets[[k]]
+        Xinput <- as.matrix(Simulation$sample[,S_k])
+        colnames(Xinput) <- S_k
+        
+        result <- InvariantConditionalQuantilePrediction(
+                        Y = Simulation$sample[,target],
+                        E = as.factor(Simulation$sample[,"E"]),
+                        X = Xinput,
+                        fitmodel = method, # also: RF, engression
+                        alpha = 0.05,
+                        verbose = FALSE,
+                        test = fishersTestExceedance,
+                        mtry = sqrt(NCOL(Xinput)),
+                        ntree = 100,
+                        nodesize = 5,
+                        maxnodes = NULL,
+                        quantiles = c(0.1, 0.5, 0.9),
+                        returnModel = FALSE, 
+                        noise_dim = 5, # engression specifications
+                        hidden_dim = 100,
+                        num_layer = 3,
+                        dropout = 0.05,
+                        batch_norm = TRUE,
+                        num_epochs = num_epochs,
+                        lr = 10^(-3),
+                        beta = 1,
+                        silent = TRUE,
+                        standardize = TRUE)
+        
+        pvals[k] <- result$pvalue
+        
+        # record_stats(c(ID = Simulation$statistics[1], set = k, pvalue = round(pvals[k],4), 
+        #                result$beta_hat, result$sd_hat),
+        #            title = paste(test, "BetaDoc", method, sep = "_") )
+      }
+      
+      # record computations
+      record_stats( c(Simulation$statistics, round(pvals,4)),
+                   title = paste(test, "SimRep", method, sep = "_") )
+      record_stats(Simulation$documentation,
+                   title = paste(test, "IntDoc", method, sep = "_") )
+
+      method <- "GAM" # \in (GAM, engression, GSIengression)
+      
+      for (k in 1:length(S_sets)) {
+    
+        S_k <- S_sets[[k]]
+        Xinput <- as.matrix(Simulation$sample[,S_k])
+        colnames(Xinput) <- S_k
+        
+        # InvResDisTest
+        result <- InvResDisTest(
+          Y = Simulation$sample[,target],
+          E = as.factor(Simulation$sample[,"E"]),
+          X = Xinput,
+          alpha = 0.05,
+          verbose = FALSE, fitmodel = method,
+          test = leveneAndWilcoxResidualDistributions, colNameNoSmooth = NULL,
+          mtry = sqrt(NCOL(Xinput)), ntree = 100, nodesize = 5, maxnodes = NULL,
+          noise_dim = 5,
+          hidden_dim = 100,
+          num_layer = 3,
+          num_epochs = num_epochs, # default set to 1000
+          silent = TRUE,
+          returnModel = FALSE
+        )
+        
+        pvals[k] <- result$pvalue
+      }
+      
+      # record computations
+      record_stats( c(Simulation$statistics, round(pvals,4)),
+                   title = paste(test, "SimRep", method, sep = "_") )
+      record_stats(Simulation$documentation,
+                   title = paste(test, "IntDoc", method, sep = "_") )
+      
+    # end computations and start error report 
+    }, error = function(e) {
+
+      # printing error if occurred
+      record_stats( c(Simulation$statistics, conditionMessage(e)),
+               title =  paste(test, "ErrorReport", method, sep = "_") )
+    }
+  # ending tryCatch
+  ) 
+# ending parallel processing 
+}
+
+
+close(pb)
+stopCluster(cluster)
+```
+
+
+
+
+
+# ---------------------------------------------------------------------------- #
+# LINEAR ICP
+# ---------------------------------------------------------------------------- #
+
+
+```{r}
+n <- 5000 # \in (100, 200, 500, 2000, 5000)
+SimRep <- 100
+test <- "InvResDist"
+
+# Set up parallel computing
+cluster <- makeSOCKcluster(3)
+registerDoSNOW(cluster)
+
+# setting up progress bar
+pb <- txtProgressBar(max=SimRep, style=3)
+progress <- function(n) setTxtProgressBar(pb, n)
+opts <- list(progress=progress)
+
+# Starting parallel processing unit
+foreach(rep = 1:SimRep,
+        .errorhandling = 'pass',
+        .combine=rbind,
+        .options.snow = opts ) %dopar% {
+          
+  # loading all packages into cores
+  load_packages(packages)
+  # loading source files into cores
+  load_files(files, folders, directory) 
+
+  # Setting up framework for error message printing
+  tryCatch(
+  # Start Computations
+    {
+      method <- "linearICP"
+      
+      Simulation <- gen_sample(n = n, d = d, dag = dag,
+                  signs = dag_signs, betas = dag_coefs, target = "random",
+                  verbose = FALSE , preSI = TRUE, monotone_fun = TRUE)
+
+      target <- Simulation$statistics[2]
+      S_sets <- obtain_S(target, d)
+      pvals <- rep(NA, length(S_sets))
+      names(pvals) <- paste("pvSet",1:length(S_sets),sep = "_")
+      
+      Xinput <- as.matrix(Simulation$sample[,!(colnames(Simulation$sample) %in% c(target, "E"))])
+      
+      for (k in 1:length(S_sets)) {
+    
+        S_k <- S_sets[[k]]
+        Xinput <- as.matrix(Simulation$sample[,S_k])
+        colnames(Xinput) <- S_k
+        
+        lmfit <- lm(Simulation$sample[,target] ~ Xinput)
+        
+        pvals[k] <- round(leveneAndWilcoxResidualDistributions(Y = Simulation$sample[,target],  
+                                                           predicted = lmfit$fitted.values, 
+                                                           E = as.factor(Simulation$sample[,"E"]), 
+                                                           verbose=FALSE)$pvalue,4)
+        
+      }
+      
+      # record computations
+      record_stats( c(Simulation$statistics, pvals),
+                   title = paste(test, "SimRep", method, sep = "_") )
+      record_stats(Simulation$documentation,
+                   title = paste(test, "IntDoc", method, sep = "_") )
+
+  
+
+    # end computations and start error report 
+    }, error = function(e) {
+
+      # printing error if occurred
+      record_stats( c(Simulation$statistics, conditionMessage(e)),
+               title =  paste(test, "ErrorReport", method, sep = "_") )
+    }
+  # ending tryCatch
+  ) 
+# ending parallel processing 
+}
+
+
+close(pb)
+stopCluster(cluster)
+```
+
+
+
+
+
+# ---------------------------------------------------------------------------- #
+# RANDOM
+# ---------------------------------------------------------------------------- #
+
+
+```{r}
+n <- 5000 # \in (100, 200, 500, 2000, 5000)
+SimRep <- 500
+test <- "random"
+method <- "random"
+
+# Set up parallel computing
+cluster <- makeSOCKcluster(3)
+registerDoSNOW(cluster)
+
+# setting up progress bar
+pb <- txtProgressBar(max=SimRep, style=3)
+progress <- function(n) setTxtProgressBar(pb, n)
+opts <- list(progress=progress)
+
+# Starting parallel processing unit
+# foreach(rep = 1:SimRep,
+#         .errorhandling = 'pass',
+#         .combine=rbind,
+#         .options.snow = opts ) %dopar% {
+#           
+#   # loading all packages into cores
+#   load_packages(packages)
+#   # loading source files into cores
+#   load_files(files, folders, directory) 
+
+for (rep in 1:SimRep) {
+  # Setting up framework for error message printing
+  tryCatch(
+  # Start Computations
+    {
+      Simulation <- gen_sample(n = n, d = d, dag = dag,
+                  signs = dag_signs, betas = dag_coefs, target = "random",
+                  verbose = FALSE , preSI = TRUE, monotone_fun = TRUE)
+      
+  # target_id <- sample(1:d, 1)
+  # target <- paste("Z", target_id, sep = "_")
+  
+  target <- Simulation$statistics[2]
+  S_sets <- obtain_S(target, d)
+  pvals <- rep(0, length(S_sets))
+  
+  target_id <- as.numeric(gsub("[^0-9]", "", target))
+
+  
+  emptyset <- rbinom(1,1,0.95)
+  
+  sample_vec <- 1:31
+  sample_vec <- sample_vec[sample_vec != target_id] 
+  
+  if(!emptyset){
+    pvals[sample(x = sample_vec,size = 1)] <- 1
+  }
+  
+  names(pvals) <- paste("pvSet",1:length(S_sets),sep = "_")
+
+      
+  record_stats( c(Simulation$statistics, pvals),
+                 title = paste(test, "SimRep", method, sep = "_") )
+
+
+
+    # end computations and start error report 
+    }, error = function(e) {
+
+      # printing error if occurred
+      record_stats( c(Simulation$statistics, conditionMessage(e)),
+               title =  paste(test, "ErrorReport", method, sep = "_") )
+    }
+  # ending tryCatch
+  ) 
+# ending parallel processing 
+}
+
+
+close(pb)
+stopCluster(cluster)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ---------------------------------------------------------------------------- #
+# PART 3
+# Compute JACCARD similarity and FWER
+# ---------------------------------------------------------------------------- #
+
+
+```{r}
+directory <- getwd()
+method <- "SIengressionQPT"
+# method <- "SimRep_GSIengression"
+
+# Tests: 
+# 1) InvResDisTest_SimRep
+# 2) InvConQuanPred_SimRep
+# 3) InvResDisTest_preSI
+# 3) InvConQuanPred_preSI
+
+# title <- paste("simulation_documentation/InvResDisTest_SimRep", method, sep = "_")
+title <- paste("InvConQuanPred_preSI", method, sep = "_")
+impdir = directory
+fileform = "csv"
+delim = ";"
+filename <- paste(impdir, "/", title, ".", fileform, sep = "")
+```
+
+
+```{r}
+# Monotone_preSI_QPT_RDT_SimRep_engression.csv
+statistics <- read.csv("random_SimRep_random.csv", 
+                       header = TRUE, sep = ";", encoding="UTF-8")
+pvals <- statistics[ , grepl("pvSet_" , names( statistics ) ) ]
+```
+
+
+```{r}
+# Define a function to clean and convert the values
+clean_numeric <- function(x) {
+  x <- gsub(",", ".", x)  # Replace commas with periods
+  return(as.numeric(x))   # Convert to numeric
+}
+pvals <- as.data.frame(lapply(pvals, function(col) sapply(col, clean_numeric)))
+
+# clean data from missing rows
+NArows <- which(apply(pvals, 1, function(row) any(is.na(row))))
+pvals <- pvals[-NArows,]
+statistics <- statistics[-NArows,]
+```
+
+
+```{r}
+verbose <- FALSE 
+nvec <- nrow(pvals)
+AbsIntSetVec <- numeric(nvec)
+AbsUnSetVec <- numeric(nvec)
+S_in_PA <- numeric(nvec)
+int_set_vec <- character(nvec)
+
+for (Sim in 1:nvec) {
+  
+  if (verbose) cat("\n Sim:",Sim)
+  # extract target of the Simulation
+  target <- statistics[Sim,"target"]
+  if (verbose) cat("\n target:", target)
+  
+  # compute all possible combination of sets S for the extracted target in the DAG
+  S_sets <- obtain_S(target, d)
+  
+  # extract the true causal parents of the extracted target
+  parents <- get_parents(target,dag = dag)
+  if (length(parents)==0){
+    parents_no <- 0 
+  } else {
+    parents_no <- unlist( convertSetToNumeric(list(parents)) )
+  }
+  
+  # extract all the accepted sets S from the simulation for the target
+  accepted_sets <- get_accepted(pvals[Sim,], S_sets)
+  accepted_sets <- convertSetToNumeric(accepted_sets)
+  
+  # compute the defining set for all accepted Sets of a Simulation
+  # def_set <- computeDefiningSets(accepted_sets)
+  
+  # compute the intersecting set for all accepted Sets of a Simulation
+  int_set <- unlist( computeSetIntersection(accepted_sets) )
+  if (length(int_set)==0) int_set <- 0 
+  
+  if (verbose) cat("\n int_set:")
+  if (verbose)  print(int_set)
+  if (verbose) cat("\n parents_no:")
+  if (verbose) print(parents_no)
+  
+  # Computing the necessary quantities for Jaccard Similarity 
+  # hat{S}: defining set (estimate of causal parents)
+  # S^*: true causal parents 
+  
+  # 1) computing |hat{S} ∩ S^*|
+  # Intersection with Empty Set:
+  # https://proofwiki.org/wiki/Intersection_with_Empty_Set
+  
+  # 2) computing |hat{S} ∪ S^*|
+  # Union with Empty Set:
+  # https://proofwiki.org/wiki/Union_with_Empty_Set
+  
+  
+  if (length(parents_no) == 1 && parents_no == 0) {
+      if (length(int_set) == 1 && int_set == 0) {
+          AbsIntSetVec[Sim] <- AbsUnSetVec[Sim] <- 1
+      } else {
+          AbsIntSetVec[Sim] <- 0
+          AbsUnSetVec[Sim] <- length(int_set)
+      }
+  } else {
+      if (length(int_set) == 1 && int_set == 0) {
+          AbsIntSetVec[Sim] <- 0
+          AbsUnSetVec[Sim] <- length(parents_no)
+      } else {
+          AbsIntSetVec[Sim] <- length(computeSetIntersection(list(int_set, parents_no)))
+          AbsUnSetVec[Sim] <- length(get_union(list(parents_no, int_set)))
+      }
+  }
+    
+  if (verbose) cat("\n AbsIntSetVec[Sim]:")
+  if (verbose) print(AbsIntSetVec[Sim])
+  if (verbose) cat("\n AbsUnSetVec[Sim]:")
+  if (verbose) print(AbsUnSetVec[Sim])
+  
+  # compute I(S \in S^\star)
+  S_in_PA[Sim] <- is_subset(int_set, unlist(append(0, parents_no)) )
+}
+
+Jaccard <- AbsIntSetVec/ AbsUnSetVec
+
+statistics <- cbind(statistics, 
+                    "AbsIntSetVec" = AbsIntSetVec, 
+                    "AbsUnSetVec" = AbsUnSetVec, 
+                    "SinPA" = S_in_PA,
+                    "Jaccard" = Jaccard)
+
+FWER <- mean(1-S_in_PA); FWER
+Jaccard_mean <- mean(Jaccard, na.rm = TRUE); Jaccard_mean
+```
+
+# ---------------------------------------------------------------------------- #
+# STORE RESULTS
+# ---------------------------------------------------------------------------- #
+
+
+# Customize the methods row number before continuing
+```{r}
+row_no <- 3
+```
+
+# Store FWER and Jaccard Sim. in matrix
+```{r}
+if (!exists("statsMat")) {
+  statsMat <- matrix(NA, 3,2)
+  colnames(statsMat) <- c("FWER", "Jaccard_mean"); statsMat
+}
+
+statsMat[row_no,1] <- FWER 
+statsMat[row_no,2] <- Jaccard_mean 
+
+statsMat
+```
+
+
+# ---------------------------------------------------------------------------- #
+# CREATE PLOTS
+# ---------------------------------------------------------------------------- #
+
+```{r}
+# specify export file name
+fig_name <- "JACCARD_FWER_postANM"
+# fig_name <- "JACCARD_FWER_preANM"
+
+# Specify export folder
+project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+figure_folder <- "writing/figures/"
+figure_dir <- paste(project_folder,figure_folder, sep = "" )
+
+# Open EPS device
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+           width = 5, height = 5, horizontal = FALSE)  
+
+# Define your data and symbols
+x <- statsMat[,1]
+y <- statsMat[,2]
+
+# Calculate the range of x and y
+x_range <- range(0, 0.3) # range(0, 0.3) 
+y_range <- range(0, 1)
+
+# Reduce space around plots
+par(mar = c(3, 3, 0.1, 0.1)) # default: par(mar = c(5.1, 4.1, 4.1, 2.1))   
+
+# Create empty plot 
+plot(x, y, xlim = x_range, ylim = y_range, type = "n", 
+     xlab = "", ylab = "", xaxt = "n", yaxt = "n", bty = "n", ann = FALSE)
+
+# Add axes
+axis(1, at = seq(0, 0.3, by = 0.05), labels = sprintf("%.2f", seq(0, 0.3, by = 0.05))) # seq(0, 0.6, by = 0.05)
+axis(2, at = seq(0, 1, by = 0.2))
+
+# Add vertical dotted line at x = 0.05
+# abline(, lty = 3, ylim = c(0, 1))
+segments(0.05, 0, 0.05, 1, lty = 3)
+
+# plotting the observations 
+# Point characters: 
+# http://www.sthda.com/english/wiki/r-plot-pch-symbols-the-different-point-shapes-available-in-r
+  # 1st observation: filled pink square
+  points(x[1], y[1], pch = 22, col = "pink", bg = "pink", cex = 2)
+  # 2nd observation: green star
+  points(x[2], y[2], pch = 2, col = "green", cex = 1.5, lwd=3.4)
+  # 2nd observation: green star
+  points(x[3], y[3], pch = 11, col = "lightblue", cex = 1.5, lwd=3.4)
+
+# Add legend
+legend("topright",
+       legend = c("GAM & RDT", "sI-engression & RDT", "sI-engression & QPT"),
+       # legend = c("GAM & RDT", "sI-Engression & QPT", "RF & QPT"),
+       pch = c(22, 2, 11), 
+       col = c("pink", "green", "lightblue"),
+       pt.bg = c("pink", "green", "lightblue"), 
+       pt.cex = 1,
+       cex = 0.8, bty = "n", 
+       title = as.expression(bquote(bold("method"))) )
+
+
+# Add axis labels
+mtext("FWER", side = 1, line = 2)
+mtext("JACCARD SIMILARITY", side = 2, line = 2)
+
+# Close EPS device
+dev.off()  
+
+```
+
+
+
+# ------------------------------------------------------------------------------
+# Simulation Count
+
+
+```{r}
+statistics <- read.csv("simulation_documentation/postANMs/InvConQuanPred_SimRep_engression.csv", header = TRUE, sep = ";", encoding="UTF-8") 
+simIDs <- as.vector(statistics$ID)
+
+statistics <- read.csv("simulation_documentation/postANMs/InvResDisTest_SimRep_engression.csv", header = TRUE, sep = ";", encoding="UTF-8") 
+simIDs <- c(simIDs, as.vector(statistics$ID))
+
+statistics <- read.csv("simulation_documentation/postANMs/InvResDisTest_SimRep_GAM.csv", header = TRUE, sep = ";", encoding="UTF-8") 
+simIDs <- c(simIDs, as.vector(statistics$ID))
+length(unique(simIDs))
+```
+
+
+
+```{r}
+statistics <- read.csv("simulation_documentation/preANMs/InvConQuanPred_preSI_SimRep_RF.csv", header = TRUE, sep = ";", encoding="UTF-8") 
+simIDs <- as.vector(statistics$ID)
+
+statistics <- read.csv("simulation_documentation/preANMs/InvConQuanPred_preSI_SimRep_SIengressionQPT.csv", header = TRUE, sep = ";", encoding="UTF-8") 
+simIDs <- c(simIDs, as.vector(statistics$ID))
+
+statistics <- read.csv("simulation_documentation/preANMs/InvResDist_SimRep_preSI_GAM.csv", header = TRUE, sep = ";", encoding="UTF-8") 
+simIDs <- c(simIDs, as.vector(statistics$ID))
+length(unique(simIDs))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

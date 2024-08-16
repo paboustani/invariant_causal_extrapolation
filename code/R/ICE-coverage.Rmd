@@ -1,0 +1,832 @@
+---
+title: "ICE-coverage"
+author: "Philip Boustani"
+date: "2024-07-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+(univariate functions
+  coverage plots
+    row: data generating functions
+    column: methods (GAM, engression, )
+  report: coverage statistics (train, test))
+  
+----------------
+  
+multivariate single-index functions on pre-ANM data
+  y predictions (methods: siengression, GAM)
+    box-plot trajectory
+      rows: data generating functions
+      1 column
+      
+  beta predictions
+    coverage plots (methods: siengression, linear regression)
+      rows: data generating functions
+      columns: sample coefficients with CI 
+
+
+
+```{r}
+# List of required packages
+packages <- c(
+  "engression",
+  "CondIndTests", 
+  "lawstat", # For levene.test
+  "stats", # For ks.test, wilcox.test
+  "mgcv", # for fitting GAMs
+  "nonlinearICP",
+  "readtext", # loading csv files
+  # "utils", # progress bar 
+  "foreach",
+  "doSNOW",  # parallel processing with progress bar 
+  "data.tree", # to create tree structures from hierarchical data
+  "quantregForest", # quantile regression forest
+  # "InvariantCausalPrediction",
+  # "distributionsrd",
+  "torch", 
+  "np", 
+  "dplyr"
+)
+
+# First, installing packages which are not yet installed and then loading all of them
+load_packages <- function(packages){
+  for (pkg in packages) {
+    if(!require(pkg, character.only = TRUE)){
+      install.packages(pkg, character.only = TRUE);
+      library(pkg, character.only = TRUE)
+    }
+  }
+}
+
+# loading packages
+load_packages(packages)
+```
+
+# load all required source files
+
+```{r}
+# List of required source files
+files <- c(
+)
+
+# if applicable, specify entire folders to be loaded
+folders <- c(
+  "gaussianEngression",
+  "engression_supplementary",
+  "external_modified"
+)
+
+# Detect working directory and load all files 
+load_files <- function(files, folders, directory){
+  
+  paths <- c(
+    file.path(directory, files),
+    file.path(directory, list.files(folders, full.names = TRUE))
+  )
+  
+  for (path in paths) {
+    source(path)
+  }
+}
+
+# loading directory  
+directory <- getwd()
+load_files(files, folders, directory)
+```
+
+
+
+
+```{r}
+f <- function(x, id) {
+  if (id == 1) {
+    return( x )
+  } else if (id == 2) {
+    return( pmax(0, x) )
+
+  } else if (id == 3) {
+    return( sign(x) * sqrt(abs(x)) )
+
+  } else if (id == 4) {
+    return( sin(2 * pi * x) )
+
+  } else if (id == "softplus"){
+    return( log(1+exp(x)) )
+
+  } else if (id == "square"){
+    return( x^2/2 )
+
+  } else if (id == "cubic"){
+    return( x^3/3 )
+
+  } else if (id == "log"){
+    return(ifelse(x <= 2, (x - 2) / 3 + log(3), log(x)))
+
+  } else {
+    stop("Specify valid function class.")
+
+  }
+} 
+```
+
+
+```{r}
+n <- 10^3
+X_1 <- rnorm(n)
+X_2 <- rnorm(n)
+X_3 <- rnorm(n)
+X_4 <- rnorm(n)
+beta <- c(3,-2,1.5,5)
+beta/norm(beta, type = "2")
+Z <- beta[1]*X_1 + beta[2]*X_2 + beta[3]*X_3 + beta[4]*X_4
+Y <- f(x = Z + rnorm(n, mean = 0,sd = 3), id = "softplus") 
+Y_nonoise <- f(x = Z, id = "softplus")
+data <- as.data.frame(cbind(X_1, X_2, X_3, X_4, Z, Y))
+threshhold <- 10
+train_df <- subset(data, Z <= threshhold)
+test_df <- subset(data, Z > threshhold)
+plot(train_df$Z,train_df$Y)
+plot(data$Z,data$Y)
+```
+
+```{r}
+beta/norm(beta, type = "2")
+```
+
+
+
+```{r}
+coef_doc_title <- "SIE_performance_coefficients"
+pred_doc_title <- "SIE_performance_predictions"
+
+SimRep <- 100
+
+# Set up parallel computing
+cluster <- makeSOCKcluster(3)
+registerDoSNOW(cluster)
+
+# setting up progress bar
+pb <- txtProgressBar(max=SimRep, style=3)
+progress <- function(n) setTxtProgressBar(pb, n)
+opts <- list(progress=progress)
+
+# Starting parallel processing unit
+foreach(rep = 1:SimRep,
+        .errorhandling = 'pass',
+        .combine=rbind,
+        .options.snow = opts ) %dopar% { # for(rep in 1:SimRep)
+          
+  # loading all packages into cores
+  load_packages(packages)
+  # loading source files into cores
+  load_files(files, folders, directory) 
+
+  # Setting up framework for error message printing
+  tryCatch(
+  # Start Computations
+    {
+      
+  # loading all packages into cores
+  load_packages(packages)
+  # loading source files into cores
+  load_files(files, folders, directory) 
+  
+  # simulate data
+  n <- 10^3
+  
+  for (func in c("softplus", "square", "cubic", "log")) {
+    X_1 <- rnorm(n)
+    X_2 <- rnorm(n)
+    X_3 <- rnorm(n)
+    X_4 <- rnorm(n)
+    
+    beta <- c(3,-2,1.5,5)
+    # beta/norm(beta, type = "2")
+    Z_nonoise <- beta[1]*X_1 + beta[2]*X_2 + beta[3]*X_3 + beta[4]*X_4
+    Z <- Z_nonoise + rnorm(n, mean = 0,sd = 3)
+    
+    Y_nonoise <- f(x = Z_nonoise, id = func)
+    Y <- f(x = Z, id = func) 
+    
+    data <- as.data.frame(cbind(X_1, X_2, X_3, X_4, Z, Y))
+    
+    # trian/test split
+    thresh_tr <- 10
+    train_df <- subset(data, Z <= thresh_tr)
+    if (func=="square") {
+      train_df <- subset(data, (Z <= thresh_tr) & (Z >= 0))
+    }
+    Xtrain <- train_df[,c("X_1", "X_2", "X_3", "X_4")]
+    Ytrain <- train_df$Y
+    
+    thresh_te <- 0
+    test_df <- subset(data, Z >= thresh_te)
+    Xtest <- test_df[,c("X_1", "X_2", "X_3", "X_4")]
+    Ztest <- test_df$Z
+    Ytest <- test_df$Y
+    
+    # ground truth values
+    Ztrue <- c(Ztrue = Z_nonoise[Z >= thresh_te])
+    Ytrue <- c(Ytrue = Y_nonoise[Z >= thresh_te])
+    
+    # Single index engression
+    method <- c(method = "sie")
+    sie_out <- SIE(
+                  X = as.matrix( Xtrain ),
+                  Y = as.matrix( Ytrain ),
+                  noise_dim = 5,
+                  hidden_dim = 100,
+                  num_layer = 3,
+                  dropout = 0.05,
+                  batch_norm = TRUE,
+                  num_epochs = 100,
+                  lr = 10^(-3),
+                  beta = 1,
+                  silent = TRUE,
+                  standardize = TRUE,
+                  GSI_rep = 3,
+                  test_data = Xtest )
+    sie_hat <- c(sie_hat = sie_out$predicted)
+    beta_hat <- sie_out$beta_hat
+    names(beta_hat) <- paste("beta", 1:4,sep = "_")
+    sd_hat <- sie_out$sd_hat
+    names(sd_hat) <- paste("sd", 1:4,sep = "_")
+
+    record_stats( c(method, func = func, beta_hat, sd_hat, rep = rep),
+                 title = paste(coef_doc_title, sep = "_") )
+
+    # GAM
+    method <- c(method = "gam")
+    gam_hat <- c(gam_hat = getgamPredictions(X = Xtrain,
+                                             Y = Ytrain,
+                                             XTest = Xtest)$predictions )
+    
+    # linear regression
+    method <- c(method = "lm")
+    lmfit <- lm(Y ~ X_1 + X_2 + X_3 + X_4, data = train_df)
+    lm_hat <- lmfit$fitted.values
+    beta_hat <- round(summary(lmfit)$coefficients[-1, 1],3)
+    names(beta_hat) <- paste("beta", 1:4,sep = "_")
+    sd_hat <- round(summary(lmfit)$coefficients[-1, 2],3)
+    names(sd_hat) <- paste("sd", 1:4,sep = "_")
+    
+    # record_stats( round(cbind(Ztest, as.matrix( Xtest ), Ytest, Ztrue, Ytrue, 
+    #                           lm_hat, rep = rep),2),
+    #              title = paste(pred_doc_title, "lm", func, sep = "_") )
+    
+    
+    record_stats( c(method, func = func, beta_hat, sd_hat, rep = rep),
+                 title = paste(coef_doc_title, sep = "_") )
+
+    # generalized single index models
+    method <- c(method = "gsi")
+    np_bw <- npindexbw(xdat = Xtrain, ydat = Ytrain, gradients=TRUE)
+    np_model <- npindex(np_bw, gradients = TRUE)
+    gsi_hat <- c(gsi_hat = predict(np_bw, Xtest)$mean)
+    beta_hat <- round(np_model$beta,3)
+    names(beta_hat) <- paste("beta", 1:4,sep = "_")
+    sd_hat <- round(diag(vcov(np_model)),3)
+    names(sd_hat) <- paste("sd", 1:4,sep = "_")
+
+    record_stats( c(method, func = func, beta_hat, sd_hat, rep = rep),
+                 title = paste(coef_doc_title, sep = "_") )
+
+    # record predictions
+    record_stats( round(cbind(Ztest, as.matrix( Xtest ), Ytest, Ztrue, Ytrue,
+                              sie_hat, gam_hat, gsi_hat, lm_hat, rep = rep),2),
+                 title = paste(pred_doc_title, func, sep = "_") )
+  
+  }
+
+  # end computations and start error report 
+    }, error = function(e) {
+
+      # printing error if occurred
+      record_stats( c(method, func, conditionMessage(e)),
+               title =  paste("ErrorReport_SIE_performance", sep = "_") )
+    }
+  # ending tryCatch
+  ) 
+# ending parallel processing 
+}
+close(pb)
+stopCluster(cluster)
+```
+
+
+
+
+
+# generalized single index models
+
+
+https://cran.r-project.org/web/packages/np/np.pdf
+
+T. Hayfield and J. S. Racine. Nonparametric econometrics: The np package. Journal of Statistical Software, 27:1–32, 2008.
+
+Hardle, W. and P. Hall and H. Ichimura (1993), “Optimal Smoothing in Single-Index Models,” The
+Annals of Statistics, 21, 157-178.
+
+```{r}
+outpui$beta/norm(outpui$beta, type = "2")
+outpui$mean
+npindexout$betavcov
+diag(vcov(npindexout))
+```
+
+
+```{r}
+plot(Ztrue, Ytrue)
+points(Ztest, sie_hat, col="magenta")
+points(Ztest, gam_hat, col="red")
+points(Ztest, gsi_hat, col="blue")
+```
+
+
+
+```{r}
+Z_nonoise_test <- Z[Z>threshhold]
+Z_nonoise_test <- Z_nonoise[Z>threshhold]
+
+
+plot(Z_nonoise_test, Ytruetest, 
+     ylim = range(Ytruetest, sie_hat, gam_hat, gsi_hat))
+points(Z_nonoise_test, Y[Z > threshhold], col = "green")
+points(Z_nonoise_test, sie_hat, col="magenta")
+points(Z_nonoise_test, gam_hat, col = "red")
+points(Z_nonoise_test, gsi_hat, col = "blue")
+```
+
+
+
+
+# Prediction Plot --------------------------------------------------------------
+
+```{r}
+predictions <- read.csv("SIE_performance_simulation/SIE_performance_predictions_log.csv", 
+                         header = TRUE, sep = ";", encoding="UTF-8")
+
+predictions <- predictions %>%
+  mutate_all(~ as.numeric(as.character(.)))
+predictions <- na.omit(predictions)
+
+plot_threshhold <- 10
+predictions$Ztest <- as.numeric(predictions$Ztest)
+
+split_index <- which(abs(plot_threshhold - predictions$Ztest)
+                     ==min(abs(plot_threshhold - predictions$Ztest)))[1]
+split_X <- as.matrix( predictions[split_index,2:5] )
+
+predictions$dist <- apply(predictions[, 2:5], 1, function(row) {
+  sqrt(sum((row - split_X) ^ 2))
+})
+
+base_round <- function(x, base) { round(x / base) * base }
+predictions$dist <- base_round(predictions$dist, 1)
+
+predictions$dist[predictions$Ztest <= plot_threshhold] <-
+  predictions$dist[predictions$Ztest <= plot_threshhold] * (-1)
+
+predictions$sie_res <- abs( predictions$Ytrue - predictions$sie_hat )
+predictions$gam_res <- abs( predictions$Ytrue - predictions$gam_hat )
+predictions$gsi_res <- abs( predictions$Ytrue - predictions$gsi_hat )
+
+boxplot( formula = sie_res ~ dist, data = predictions, outline = FALSE )
+boxplot( formula = gam_res ~ dist, data = predictions, outline = FALSE )
+boxplot( formula = gsi_res ~ dist, data = predictions, outline = FALSE )
+```
+
+```{r}
+predictions_lm <- read.csv("SIE_performance_simulation/SIE_performance_predictions_lm_log.csv", 
+                         header = TRUE, sep = ";", encoding="UTF-8")
+
+predictions_lm <- predictions_lm %>%
+  mutate_all(~ as.numeric(as.character(.)))
+predictions_lm <- na.omit(predictions_lm)
+
+plot_threshhold <- 10
+predictions_lm$Ztest <- as.numeric(predictions_lm$Ztest)
+
+split_index <- which(abs(plot_threshhold - predictions_lm$Ztest)
+                     ==min(abs(plot_threshhold - predictions_lm$Ztest)))[1]
+split_X <- as.matrix( predictions_lm[split_index,2:5] )
+
+predictions_lm$dist <- apply(predictions_lm[, 2:5], 1, function(row) {
+  sqrt(sum((row - split_X) ^ 2))
+})
+
+base_round <- function(x, base) { round(x / base) * base }
+predictions_lm$dist <- base_round(predictions_lm$dist, 1)
+
+predictions_lm$dist[predictions_lm$Ztest <= plot_threshhold] <-
+  predictions_lm$dist[predictions_lm$Ztest <= plot_threshhold] * (-1)
+
+predictions_lm$lm_res <- abs( predictions_lm$Ytrue - predictions_lm$lm_hat )
+boxplot( formula = lm_res ~ dist, data = predictions_lm, outline = FALSE )
+```
+
+
+
+
+# Predictions Plot -------------------------------------------------------------
+
+```{r}
+# Assuming predictions_df contains the columns dist, gsi_res, gam_res, sie_res
+predictions_df <- data.frame(
+  dist = predictions$dist,
+  gsi_res = predictions$gsi_res,
+  gam_res = predictions$gam_res,
+  sie_res = predictions$sie_res
+)
+
+# Reshape the data into long format
+predictions_long <- reshape(predictions_df, 
+                            varying = c("gsi_res", "gam_res", "sie_res"), 
+                            v.names = "res_value", 
+                            timevar = "res_type", 
+                            times = c("gsi_res", "gam_res", "sie_res"), 
+                            direction = "long")
+
+lm_df <- predictions_lm[, c("dist", "lm_res")]
+colnames(lm_df) <- c("dist", "res_value")
+lm_df$res_type <- "lm_res"
+lm_df$id <- 1:length(lm_df$res_type)
+predictions_long <- rbind(predictions_long, lm_df)
+
+# predictions_long$res_value[predictions_long$res_type=="sie_res"] <- predictions_long$res_value[predictions_long$res_type=="sie_res"] + 500
+
+
+# Unique distances
+dists <- -5:5 # sort(unique(predictions_long$dist))
+
+# Calculate the positions with increased spacing between groups
+num_groups <- length(dists)
+group_width <- 4  # Width of each group of boxplots
+gap_width <- 2    # Gap between groups
+total_width <- num_groups * group_width + (num_groups - 1) * gap_width
+```
+
+
+```{r}
+# specify export file name
+fig_name <- "AbsPredictionError_log"
+# fig_name <- "JACCARD_FWER_preANM"
+
+# Specify export folder
+project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+figure_folder <- "writing/figures/"
+figure_dir <- paste(project_folder,figure_folder, sep = "" )
+
+# Open EPS device
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+           width = 12, height = 4, horizontal = FALSE)
+
+# Reduce space around plots and remove the box around the plot
+par(mar = c(3, 3, 0.1, 0.1), bty = "n")
+
+# Create an empty plot with the right dimensions
+plot(1, type = "n", xlim = c(0.5, total_width + 0.5), 
+     ylim = c(0, 7), #range(predictions_long$res_value), 
+     xaxt = "n", xlab = "n", ylab = "n")
+
+colors <- c("plum1", "lightgreen", "paleturquoise2", "magenta")
+
+# Add the boxplots
+for (i in 1:length(dists)) {
+  subset_data <- subset(predictions_long, dist == dists[i])
+  group_start <- (i - 1) * (group_width + gap_width) + 1
+  unique_res_types <- unique(subset_data$res_type)
+  boxplot(res_value ~ res_type, data = subset_data, outline = FALSE, 
+          at = group_start + 0:(length(unique_res_types) - 1), add = TRUE, 
+          col = colors, xaxt = "n")
+}
+
+# Add custom x-axis labels
+axis(1, at = seq(2.5, by = group_width + gap_width, length.out = length(dists)), 
+     labels = dists)
+
+legend("topleft", legend = c("GAM", "SI-Re", "LM", "SI-En"), 
+       fill = colors, title = as.expression(bquote(bold("method"))), bty = "n")
+
+mtext("eucledian distance from test split", side = 1, line = 2)
+mtext("absolute prediction error", side = 2, line = 2)
+
+# Close EPS device
+dev.off()
+```
+
+
+
+
+
+
+
+# Coefficient Plot -------------------------------------------------------------
+
+
+
+```{r}
+coefficients_df <- read.csv("SIE_performance_simulation/SIE_performance_coefficients.csv", 
+                         header = TRUE, sep = ";", encoding="UTF-8")
+```
+
+
+```{r}
+extract_vec <- coefficients_df$method=="lm" & coefficients_df$func=="log"
+subset <- coefficients_df[extract_vec,]
+
+
+subset$k <- apply(subset[, c("beta_1", "beta_2", "beta_3", "beta_4")], 1, function(row) {
+  sqrt(sum(row^2))
+})
+
+devcols <- !(names(subset) %in% c("method", "func","k", "rep"))
+
+beta <- c(3,-2,1.5,5)
+
+subset[,devcols] <- subset[, devcols] / subset$k
+
+for (b in 1:4) {
+  lci <- subset[,2+b] - 1.96 * subset[,6+b]
+  uci <- subset[,2+b] + 1.96 * subset[,6+b]
+  
+  lci[round(subset[,6+b],4)==0] <- NA
+  
+  uci[round(subset[,6+b],4)==0] <- NA
+  
+  xaxis_index <- runif(n = length(subset[,2+b]))
+  
+  plot(xaxis_index, subset[,2+b], 
+       ylim = range(subset[,2+b],lci, uci, na.rm = TRUE), 
+       type = "n")
+  arrows(x0 = xaxis_index[!is.na(lci)], x1 = xaxis_index[!is.na(lci)], 
+         y0 = lci[!is.na(lci)], y1 = uci[!is.na(lci)], code = 3, 
+           angle = 90, lwd = 1, col = "plum1", length = 0.05)
+  
+  beta_value <- beta[b]/norm(beta, type = "2")
+  segments(x0 = 0,y0 = beta_value,x1 = 1,y1 = beta_value,lwd = 2, lty = 3)
+  points(xaxis_index, subset[,2+b], pch=16, col = "plum4")
+  
+  coverage <- lci <= beta_value
+  coverage <- coverage * (uci >= beta_value)
+  print(sum(coverage)/length(coverage))
+}
+```
+
+
+```{r}
+for (meth in unique(coefficients_df$method)) {
+  
+  cat("\n Method:", meth)
+  for (fun in unique(coefficients_df$func)) {
+    cat("\n function:", fun, "\n")
+  
+    extract_vec <- coefficients_df$method==meth & coefficients_df$func==fun
+    subset <- coefficients_df[extract_vec,]
+    
+    subset$k <- apply(subset[, c("beta_1", "beta_2", "beta_3", "beta_4")], 1, function(row) {
+      sqrt(sum(row^2))
+    })
+    
+    devcols <- !(names(subset) %in% c("method", "func","k", "rep"))
+    
+    beta <- c(3,-2,1.5,5)
+    
+    subset[,devcols] <- subset[, devcols] / subset$k
+    
+    coverage_mean <- 0
+    for (b in 1:4) {
+      lci <- subset[,2+b] - 1.96 * subset[,6+b]
+      uci <- subset[,2+b] + 1.96 * subset[,6+b]
+      
+      lci[round(subset[,6+b],4)==0] <- NA
+      
+      uci[round(subset[,6+b],4)==0] <- NA
+      
+      beta_value <- beta[b]/norm(beta, type = "2")
+      
+      coverage <- lci <= beta_value
+      coverage <- coverage * (uci >= beta_value)
+      coverage <- sum(coverage, na.rm = TRUE)/length(coverage)
+      # print(coverage)
+      coverage_mean <- coverage_mean + coverage
+    }
+    print(coverage_mean/4)
+  }
+  
+}
+```
+
+Method: sie
+ function: softplus 
+[1] 0.95
+
+ function: square 
+[1] 0.8225
+
+ function: cubic 
+[1] 0.9275
+
+ function: log 
+[1] 0.8975
+
+ Method: lm
+ function: softplus 
+[1] 0.975
+
+ function: square 
+[1] 0.9825
+
+ function: cubic 
+[1] 0.9825
+
+ function: log 
+[1] 0.97
+
+ Method: gsi
+ function: softplus 
+[1] 0.12
+
+ function: square 
+[1] 0.1125
+
+ function: cubic 
+[1] 0.14
+
+ function: log 
+[1] 0.1275
+
+```{r}
+# Filter the data by function only
+extract_vec <- coefficients_df$func == "cubic"
+subset <- coefficients_df[extract_vec,]
+
+# Calculate the k column
+subset$k <- apply(subset[, c("beta_1", "beta_2", "beta_3", "beta_4")], 1, function(row) {
+  sqrt(sum(row^2))
+})
+
+# Normalize the relevant columns by k
+devcols <- !(names(subset) %in% c("method", "func", "k", "rep"))
+beta <- c(3, -2, 1.5, 5)
+subset[, devcols] <- subset[, devcols] / subset$k
+
+
+acolors <- c("magenta", "paleturquoise2", "palegreen")
+pcolors <- c("magenta4", "paleturquoise4", "palegreen4")
+
+# Loop over each beta coefficient
+for (b in 1:4) {
+  fig_name <- paste0("BetaCoverage_cubic_Beta", b)
+  
+  # Specify export folder
+  project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+  figure_folder <- "writing/figures/"
+  figure_dir <- paste(project_folder,figure_folder, sep = "" )
+  
+  # Open EPS device
+  postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+             width = 3, height = 4, horizontal = FALSE)
+
+  
+  par(pin = c(5, 10), mar = c(3, 3, 0.1, 0.1), bty = "n")
+
+  # Initialize an empty plot
+  plot(NA, xlab = "n", ylab = "n", axes = FALSE,  
+       xlim = c(0.6,3.4),
+       ylim = range((subset[, 2+b] - 1.96 * subset[, 6+b])[subset[, 6+b] < 0.3], 
+                    (subset[, 2+b] + 1.96 * subset[, 6+b])[subset[, 6+b] < 0.3],
+                    na.rm = TRUE))
+  
+  # Loop over each method
+  for (method_index in 1:3) {
+    method_name <- unique(subset$method)[method_index]
+    
+    # Subset the data for the current method
+    method_subset <- subset[subset$method == method_name, ]
+    
+    # Randomly sample 30 rows
+    if (nrow(method_subset) > 30) {
+      method_subset <- method_subset[sample(1:nrow(method_subset), 30), ]
+    }
+    
+    # Calculate the confidence intervals
+    lci <- method_subset[, 2+b] - 1.96 * method_subset[, 6+b]
+    uci <- method_subset[, 2+b] + 1.96 * method_subset[, 6+b]
+    
+    # Handle cases where the standard error is 0
+    lci[round(method_subset[, 6+b], 4) == 0] <- NA
+    uci[round(method_subset[, 6+b], 4) == 0] <- NA
+    
+    lci[round(method_subset[, 6+b], 4) > 0.3] <- NA
+    uci[round(method_subset[, 6+b], 4) > 0.3] <- NA
+    
+    # Generate x-axis positions with gaps between methods
+    xaxis_index <- method_index + runif(n = length(method_subset[, 2+b]), 
+                                        min = -0.4, max = 0.4)
+    
+    # Plot the confidence intervals
+    arrows(x0 = xaxis_index[!is.na(lci)], x1 = xaxis_index[!is.na(lci)], 
+           y0 = lci[!is.na(lci)], y1 = uci[!is.na(lci)], code = 3, 
+           angle = 90, lwd = 1, col = acolors[method_index], length = 0.05)
+    
+    # Plot the points
+    points(xaxis_index, method_subset[, 2+b], pch = 16, col = pcolors[method_index])
+  }
+  
+  # Add the true beta value as a horizontal line
+  beta_value <- beta[b] / norm(beta, type = "2")
+  abline(h = beta_value, lwd = 2, lty = 3)
+  
+  axis(1, at = 1:3, labels = c("SI-En", "LM", "SI-Re"))
+  axis(2)
+  mtext("predicted coefficients", side = 2, line = 2)
+  # Close EPS device
+  dev.off()
+  
+  # Calculate and print the coverage for each method
+  coverage <- lci <= beta_value & uci >= beta_value
+  print(sum(coverage, na.rm = TRUE) / length(coverage))
+}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ------------------------------------------------------------------------------
+# ABLAGE 
+# ------------------------------------------------------------------------------
+
+# SI Quantile Regressio --------------------------------------------------------
+
+```{r}
+library("siqr")
+```
+```{r}
+# Scale the predictors
+X <- as.matrix(train_df[, c("X_1", "X_2", "X_3", "X_4")])
+y0 <- train_df$Y
+
+# Initial beta
+beta.initial <- NULL
+
+# Fit the model
+est <- siqr(y0, X, beta.initial = beta.initial, tau = 0.5)
+est$beta
+predict(est, test_df[,c("X_1", "X_2", "X_3", "X_4")] )
+```
+
+https://journal.r-project.org/archive/2021/RJ-2021-092/RJ-2021-092.pdf
+
+
+
+# Sliced Inverse Regression ----------------------------------------------------
+
+
+```{r}
+# Load the package
+library(dr)
+```
+https://cran.r-project.org/web/packages/dr/dr.pdf
+
+```{r}
+# Example usage of SIR
+sir_model <- dr(Y ~ X_1 + X_2 + X_3 + X_4, data = train_df, method = "sir", nslices = 10)
+summary(sir_model)
+```
+
+
+

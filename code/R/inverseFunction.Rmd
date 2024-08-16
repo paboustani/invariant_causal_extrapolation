@@ -1,0 +1,1292 @@
+---
+title: "Inverse Function"
+author: "Philip Boustani"
+date: "2024-06-25"
+output: html_document
+---
+
+# Setup Rmarkdown
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# install packages
+
+```{r}
+# List of required packages
+packages <- c(
+  "engression",
+  "stats",
+  "torch", 
+  "scales", 
+  "distributionsrd",
+  "InvariantCausalPrediction", 
+  "scam"
+)
+
+# First, installing packages which are not yet installed and then loading all of them
+for (pkg in packages) {
+  if(!require(pkg, character.only = TRUE)){
+    install.packages(pkg, character.only = TRUE);
+    library(pkg, character.only = TRUE)
+  }
+}
+```
+
+# define custom functions
+
+```{r}
+# List of required source files
+files <- c(
+)
+
+# if applicable, specify entire folders to be loaded
+folders <- c(
+  "gaussianEngression",
+  "GSIengression", 
+  "external_modified", 
+  "engression_supplementary"
+)
+
+# Detect working directory and load all files 
+load_files <- function(files, folders, directory){
+  
+  paths <- c(
+    file.path(directory, files),
+    file.path(directory, list.files(folders, full.names = TRUE))
+  )
+  
+  for (path in paths) {
+    source(path)
+  }
+}
+
+# loading directory  
+directory <- getwd()
+load_files(files, folders, directory)
+```
+
+
+# define further functions
+
+```{r}
+monotone <- function(X, Y, drop = FALSE) {
+  # Check if the relation is increasing or decreasing
+  is_increasing <- cor(X, Y) > 0
+  
+  # Create a data frame and sort it based on X
+  data <- data.frame(X, Y)
+  data_sorted <- data[order(data$X), ]
+  
+  if (drop) {
+    if (is_increasing) {
+      # Implementing the "drop" for increasing relationship
+      Y_dropped <- data_sorted$Y
+      to_keep <- rep(TRUE, length(Y_dropped))
+      max_Y <- Y_dropped[1]
+      for (i in 2:length(Y_dropped)) {
+        if (Y_dropped[i] <= max_Y) {
+          to_keep[i] <- FALSE
+        } else {
+          max_Y <- Y_dropped[i]
+        }
+      }
+      data_sorted <- data_sorted[to_keep, ]
+    } else {
+      # Implementing the "drop" for decreasing relationship
+      Y_dropped <- data_sorted$Y
+      to_keep <- rep(TRUE, length(Y_dropped))
+      min_Y <- Y_dropped[1]
+      for (i in 2:length(Y_dropped)) {
+        if (Y_dropped[i] >= min_Y) {
+          to_keep[i] <- FALSE
+        } else {
+          min_Y <- Y_dropped[i]
+        }
+      }
+      data_sorted <- data_sorted[to_keep, ]
+    }
+  } else {
+    # Apply the appropriate step function based on the relation
+    if (is_increasing) {
+      # Implementing the "lifting" step function for increasing relationship
+      Y_lifted <- data_sorted$Y
+      for (i in 2:length(Y_lifted)) {
+        if (Y_lifted[i] < Y_lifted[i - 1]) {
+          Y_lifted[i] <- Y_lifted[i - 1]
+        }
+      }
+      data_sorted$Y <- Y_lifted
+    } else {
+      # Implementing the "reducing" step function for decreasing relationship
+      Y_reduced <- data_sorted$Y
+      for (i in 2:length(Y_reduced)) {
+        if (Y_reduced[i] > Y_reduced[i - 1]) {
+          Y_reduced[i] <- Y_reduced[i - 1]
+        }
+      }
+      data_sorted$Y <- Y_reduced
+    }
+  }
+  
+  data_sorted
+}
+```
+
+```{r}
+# Function to compute the generalized inverse
+compute_inverse <- function(X, Y, method = "linear") {
+  # Check if the relation is increasing or decreasing
+  correlation <- cor(X, Y)
+  is_increasing <- correlation > 0
+  
+  # Ensure Y is strictly monotone in the correct direction
+  if (is_increasing) {
+    if (any(diff(Y) <= 0)) {
+      stop("Y is not strictly increasing.")
+    }
+  } else {
+    if (any(diff(Y) >= 0)) {
+      stop("Y is not strictly decreasing.")
+    }
+  }
+  
+  if (method == "linear") {
+    # Create a function for the generalized inverse using linear interpolation
+    generalized_inverse <- approxfun(Y, X, method = "linear", rule = 2)
+  } else if (method == "stepwise") {
+    # Create a stepwise function for the generalized inverse
+    generalized_inverse <- function(y) {
+      # Initialize the output vector
+      x_values <- numeric(length(y))
+      
+      # Loop through each y value to find the corresponding x
+      for (i in seq_along(y)) {
+        if (is_increasing) {
+          # Find the index of the largest Y that is less than or equal to the current y
+          index <- max(which(Y <= y[i]))
+        } else {
+          # Find the index of the smallest Y that is greater than or equal to the current y
+          index <- min(which(Y <= y[i]))
+        }
+        x_values[i] <- X[index]
+      }
+      
+      return(x_values)
+    }
+  } else if (method == "spline") {
+    # Fit a monotone spline based on the relationship
+    if (is_increasing) {
+      fit <- scam(X ~ s(Y, bs = "mpi", k = length(Y)))
+    } else {
+      fit <- scam(X ~ s(Y, bs = "mpd", k = length(Y)))
+    }
+    
+    # Create a function for the generalized inverse using the spline fit
+    generalized_inverse <- function(y) {
+      predict(fit, newdata = data.frame(Y = y))
+    }
+  } else {
+    stop("Unknown method. Use 'linear', 'stepwise', or 'spline'.")
+  }
+  
+  return(generalized_inverse)
+}
+```
+
+```{r}
+f <- function(x, id) {
+  if (id == 1) {
+    return( x )
+  } else if (id == 2) {
+    return( pmax(0, x) )
+
+  } else if (id == 3) {
+    return( sign(x) * sqrt(abs(x)) )
+
+  } else if (id == 4) {
+    return( sin(2 * pi * x) )
+
+  } else if (id == "softplus"){
+    return( log(1+exp(x)) )
+
+  } else if (id == "square"){
+    return( x^2/2 )
+
+  } else if (id == "cubic"){
+    return( x^3/3 )
+
+  } else if (id == "log"){
+    return(ifelse(x <= 2, (x - 2) / 3 + log(3), log(x)))
+
+  } else {
+    stop("Specify valid function class.")
+
+  }
+} 
+```
+
+# Index Engression
+
+```{r}
+sim_method <- "softplus"
+beta <- c(3,0.5)
+# Generate example data (strictly increasing function)
+set.seed(123)
+n <- 10^3
+X1 <- rnorm(n,0,2) # rt(n, df=100) # rnorm(n,5,2) # runif(n, 0,5)
+X2 <- rnorm(n,0,2) # rt(n, df=100) # rnorm(n,10,3) # runif(n, 0,5)
+# X1 <- abs(X1)
+# X2 <- abs(X2)
+Z <- beta[1]*X1 + beta[2]*X2 
+Ytrue <- f( Z, id =  sim_method)
+Y <- f( Z + rnorm(n, mean=0, sd=2), id = sim_method )
+
+plot(Z, Y)
+lines(sort(Z), sort(Ytrue), col = "red")
+```
+
+```{r}
+zdist <- abs(max(Z)-min(Z))
+const <- 0.2
+Zest <- seq(min(Z)-const*zdist, max(Z)+const*zdist, length.out=10^3)
+# Zest <- Z
+```
+
+
+
+```{r}
+engfit <- monotone_engression( X = Z, Y = Y, noise_dim = 5, hidden_dim = 100,
+                      num_layer = 3, dropout = 0.05, batch_norm = TRUE,
+                      num_epochs = 100, lr = 10^(-1), beta = 1, silent = TRUE,
+                      standardize = TRUE)
+Yhat <- predict(engfit, Zest, type = "quantiles", quantiles = c(0.5))
+quant <- predict(engfit, Zest, type = "quantiles", quantiles = c(0.1,0.9) )
+
+plot(Zest, Yhat, type = "l")
+lines(Zest, f(Zest,id = sim_method ), col = "red")
+lines(Zest, quant[,1], col = "gray")
+lines(Zest, quant[,2], col = "gray")
+```
+```{r}
+# specify export file name
+fig_name <- "PredictedInverse_monotone"
+# fig_name <- "JACCARD_FWER_preANM"
+
+# Specify export folder
+project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+figure_folder <- "writing/figures/"
+figure_dir <- paste(project_folder,figure_folder, sep = "" )
+
+# Open EPS device
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+           width = 5, height = 4, horizontal = FALSE)
+
+# Reduce space around plots and remove the box around the plot
+par(mar = c(3, 3, 0.1, 0.1), bty = "n")
+
+plot(Zest, Yhat, type = "n", xlab = "n", ylab = "n", axes = FALSE)
+polygon(c(rev(Zest), Zest), 
+        c(rev(quant[,2]), quant[,1]), 
+        col = "pink", 
+        border = NA
+      )
+lines(Zest, Yhat, col = "magenta", lwd = 2)
+lines(Zest, f(Zest,id = sim_method ), col = "darkgreen", lty = 3, lwd = 2)
+legend("topleft", 
+       legend = c("true f(Z)", "predicted mean", "80% CI"), 
+       col = c("darkgreen", "magenta", "pink"), 
+       lty = c(3, 1, 1),  
+       lwd = c(2, 2, 7),  # Increase line width for the third item
+       bty = "n")
+
+axis(1, at = seq(-25,25,by=5))
+axis(2)
+
+mtext("index", side = 1, line = 2)
+mtext("predicted", side = 2, line = 2)
+# Close EPS device
+dev.off()
+```
+
+
+```{r}
+engfit <- engression( X = Z, Y = Y, noise_dim = 5, hidden_dim = 100,
+                      num_layer = 3, dropout = 0.05, batch_norm = TRUE,
+                      num_epochs = 100, lr = 10^(-3), beta = 1, silent = TRUE,
+                      standardize = TRUE)
+
+Yhat <- predict(engfit, Zest)
+quant <- predict(engfit, Zest, type = "quantiles", quantiles = c(0.1,0.9) )
+
+plot(Zest, Yhat, type = "l")
+lines(Zest, f(Zest,id = sim_method ), col = "red")
+lines(Zest, quant[,1], col = "gray")
+lines(Zest, quant[,2], col = "gray")
+```
+
+
+
+
+```{r}
+# specify export file name
+fig_name <- "PredictedInverse_engression"
+# fig_name <- "JACCARD_FWER_preANM"
+
+# Specify export folder
+project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+figure_folder <- "writing/figures/"
+figure_dir <- paste(project_folder,figure_folder, sep = "" )
+
+# Open EPS device
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+           width = 5, height = 4, horizontal = FALSE)
+
+# Reduce space around plots and remove the box around the plot
+par(mar = c(3, 3, 0.1, 0.1), bty = "n")
+
+plot(Zest, Yhat, type = "n", xlab = "n", ylab = "n", axes = FALSE)
+polygon(c(rev(Zest), Zest), 
+        c(rev(quant[,2]), quant[,1]), 
+        col = "pink", 
+        border = NA
+      )
+lines(Zest, Yhat, col = "magenta", lwd = 2)
+lines(Zest, f(Zest,id = sim_method ), col = "darkgreen", lty = 3, lwd = 2)
+legend("topleft", 
+       legend = c("true f(Z)", "predicted mean", "80% CI"), 
+       col = c("darkgreen", "magenta", "pink"), 
+       lty = c(3, 1, 1),  
+       lwd = c(2, 2, 7),  # Increase line width for the third item
+       bty = "n")
+
+
+axis(1, at = seq(-25,25,by=5))
+axis(2, at = seq(0,28,by=4))
+
+mtext("index", side = 1, line = 2)
+mtext("predicted", side = 2, line = 2)
+# Close EPS device
+dev.off()
+```
+
+
+
+
+
+```{r}
+output <- monotone(Zest,Yhat,drop = TRUE)
+Zmon <- output$X
+Ymon <- output$Y
+plot(Zmon, Ymon, type = "l")
+lines(Zmon, f(Zmon,id = sim_method ), col = "red")
+lines(monotone(Zest,quant[,1],drop = TRUE)$X, monotone(Zest,quant[,1],drop = TRUE)$Y , col = "gray")
+lines(Zest, quant[,2], col = "gray")
+```
+
+
+
+
+
+
+```{r}
+# Compute the generalized inverse function using stepwise method
+gen_inv_stepwise <- estimate_inverse(Zmon, Ymon, method = "stepwise")
+
+# Compute the generalized inverse function using linear method
+gen_inv_linear <- estimate_inverse(Zmon, Ymon, method = "linear")
+
+# Compute the generalized inverse function using spline method
+gen_inv_spline <- estimate_inverse(Zmon, Ymon, method = "spline")
+
+# To demonstrate the generalized inverse over a range of Y values
+Y_values <- seq(min(Ymon), max(Ymon), length.out = 10^4)
+X_values_stepwise <- gen_inv_stepwise(Y_values)
+X_values_linear <- gen_inv_linear(Y_values)
+X_values_spline <- gen_inv_spline(Y_values)
+```
+
+
+
+
+```{r}
+# specify export file name
+fig_name <- "PredictedInverse_stepfun_engression"
+# fig_name <- "JACCARD_FWER_preANM"
+
+# Specify export folder
+project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+figure_folder <- "writing/figures/"
+figure_dir <- paste(project_folder,figure_folder, sep = "" )
+
+# Open EPS device
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+           width = 5, height = 4, horizontal = FALSE)
+
+# Reduce space around plots and remove the box around the plot
+par(mar = c(3, 3, 0.1, 0.1), bty = "n")
+
+plot(Y, Z, col = "lightgreen", pch = 16, xlab = "n", ylab = "n", 
+     ylim = c(min(Zest), max(Z)), axes = FALSE)
+# lines(Zest, Yhat, col = "magenta", lwd = 2)
+lines(Yhat, Zest, col = "magenta", lwd = 2)
+lines(f(Zest,id = sim_method ), Zest, col = "darkgreen", lty = 3, lwd = 2)
+
+lines(Y_values,X_values_stepwise,  type = "l", col = "orange", lwd = 2)
+# lines(Ymon, Zmon, type = "l", col = "orange", lwd = 2)
+legend("bottomright", 
+       legend = c("training data", "true f(Z)", "predicted mean", "step function"), 
+       col = c("lightgreen", "darkgreen", "magenta", "orange"), 
+       pch = c(16, NA, NA, NA),
+       lty = c(NA,3, 1, 1),  
+       lwd = c(NA,2, 2, 2),  # Increase line width for the third item
+       bty = "n")
+
+axis(1) #, at = seq(-25,25,by=5))
+axis(2, at = seq(-25,20,by=5))
+
+mtext("Y", side = 1, line = 2)
+mtext("index", side = 2, line = 2)
+# Close EPS device
+dev.off()
+```
+
+
+```{r}
+# specify export file name
+fig_name <- "PredictedInverse_stepfun_monotone"
+# fig_name <- "JACCARD_FWER_preANM"
+
+# Specify export folder
+project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+figure_folder <- "writing/figures/"
+figure_dir <- paste(project_folder,figure_folder, sep = "" )
+
+# Open EPS device
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+           width = 5, height = 4, horizontal = FALSE)
+
+# Reduce space around plots and remove the box around the plot
+par(mar = c(3, 3, 0.1, 0.1), bty = "n")
+
+plot(Y, Z, col = "lightgreen", pch = 16, xlab = "n", ylab = "n", axes = FALSE)
+# lines(Zest, Yhat, col = "magenta", lwd = 2)
+lines(Yhat, Zest, col = "magenta", lwd = 2)
+lines(f(Zest,id = sim_method ), Zest, col = "darkgreen", lty = 3, lwd = 2)
+
+lines(Y_values,X_values_stepwise,  type = "l", col = "orange", lwd = 2)
+# lines(Ymon, Zmon, type = "l", col = "orange", lwd = 2)
+legend("bottomright", 
+       legend = c("training data", "true f(Z)", "predicted mean", "step function"), 
+       col = c("lightgreen", "darkgreen", "magenta", "orange"), 
+       pch = c(16, NA, NA, NA),
+       lty = c(NA,3, 1, 1),  
+       lwd = c(NA,2, 2, 2),  # Increase line width for the third item
+       bty = "n")
+
+axis(1) #, at = seq(-25,25,by=5))
+axis(2)
+
+mtext("Y", side = 1, line = 2)
+mtext("index", side = 2, line = 2)
+# Close EPS device
+dev.off()
+```
+
+
+```{r}
+Yinv_step <- gen_inv_stepwise(Y)
+Yinv_lin <- gen_inv_linear(Y)
+Yinv_spline <- gen_inv_spline(Y)
+```
+
+
+```{r}
+# specify export file name
+fig_name <- "PredictedInverse_transformeddata_monotone"
+# fig_name <- "JACCARD_FWER_preANM"
+
+# Specify export folder
+project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+figure_folder <- "writing/figures/"
+figure_dir <- paste(project_folder,figure_folder, sep = "" )
+
+# Open EPS device
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+           width = 5, height = 4, horizontal = FALSE)
+
+# Reduce space around plots and remove the box around the plot
+par(mar = c(3, 3, 0.1, 0.1), bty = "n")
+
+plot(Z,Yinv_step, type = "n", xlab = "n", ylab = "n", axes = FALSE)
+points(Z,Y, pch = 16, col ="lightgreen", cex = 0.7)
+points(Z,Yinv_step, pch = 16, col ="orange", cex = 0.7)
+lines(Zest, f(Zest,id = sim_method ), col = "darkgreen", lty = 3, lwd = 2)
+lines(Zest, Zest, col = "brown", lty = 2, lwd = 2)
+
+legend("topleft", 
+       legend = c("training data", "true f(Z)", "transformed data", "true Z"), 
+       col = c("lightgreen", "darkgreen", "orange", "brown"), 
+       pch = c(16, NA, 16, NA),
+       lty = c(NA, 3, NA, 2),  
+       lwd = c(NA, 2, NA, 2),  # Increase line width for the third item
+       bty = "n")
+
+axis(1) #, at = seq(-25,25,by=5))
+axis(2, at = seq(-4,20,by=4))
+
+mtext("index", side = 1, line = 2)
+mtext("Y", side = 2, line = 2)
+# Close EPS device
+dev.off()
+```
+
+```{r}
+# specify export file name
+fig_name <- "PredictedInverse_transformeddata_engression"
+# fig_name <- "JACCARD_FWER_preANM"
+
+# Specify export folder
+project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+figure_folder <- "writing/figures/"
+figure_dir <- paste(project_folder,figure_folder, sep = "" )
+
+# Open EPS device
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+           width = 5, height = 4, horizontal = FALSE)
+
+# Reduce space around plots and remove the box around the plot
+par(mar = c(3, 3, 0.1, 0.1), bty = "n")
+
+plot(Z,Yinv_step, type = "n", xlab = "n", ylab = "n", axes = FALSE)
+points(Z,Y, pch = 16, col ="lightgreen", cex = 0.7)
+points(Z,Yinv_step, pch = 16, col ="orange", cex = 0.7)
+lines(Zest, f(Zest,id = sim_method ), col = "darkgreen", lty = 3, lwd = 2)
+lines(Zest, Zest, col = "brown", lty = 2, lwd = 2)
+
+legend("bottomright", 
+       legend = c("training data", "true f(Z)", "transformed data", "true Z"), 
+       col = c("lightgreen", "darkgreen", "orange", "brown"), 
+       pch = c(16, NA, 16, NA),
+       lty = c(NA, 3, NA, 2),  
+       lwd = c(NA, 2, NA, 2),  # Increase line width for the third item
+       bty = "n")
+
+axis(1) #, at = seq(-25,25,by=5))
+axis(2, at = seq(-24,20, by=8))
+
+mtext("index", side = 1, line = 2)
+mtext("Y", side = 2, line = 2)
+# Close EPS device
+dev.off()
+```
+
+
+```{r}
+res_step <- lm(Yinv_step~Z)$residuals
+res_lin <- lm(Yinv_lin~Z)$residuals
+res_spline <- lm(Yinv_spline~Z)$residuals
+
+plot(Z, res_step)
+plot(Z, res_lin)
+plot(Z, res_spline)
+
+shapiro.test(res_step)$p.value
+shapiro.test(res_lin)$p.value
+shapiro.test(res_spline)$p.value
+```
+
+for small grid size: 
+
+> shapiro.test(res_step)$p.value
+[1] 0.002947429
+> shapiro.test(res_lin)$p.value
+[1] 0.00217449
+> shapiro.test(res_spline)$p.value
+[1] 0.002862807
+
+for large grid size: 
+
+> shapiro.test(res_step)$p.value
+[1] 0.4070628
+> shapiro.test(res_lin)$p.value
+[1] 0.3725122
+> shapiro.test(res_spline)$p.value
+[1] 0.2731543
+
+
+```{r}
+# specify export file name
+fig_name <- "InverseResiduals_largegrid_stepfunction"
+# fig_name <- "JACCARD_FWER_preANM"
+
+# Specify export folder
+project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+figure_folder <- "writing/figures/"
+figure_dir <- paste(project_folder,figure_folder, sep = "" )
+
+# Open EPS device
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+           width = 5, height = 4, horizontal = FALSE)
+
+# Reduce space around plots and remove the box around the plot
+par(mar = c(3, 3, 0.1, 0.1), bty = "n")
+plot(Z, res_step, xlab = "n", type = "n", ylab = "n", axes = FALSE)
+segments(x0 = 0,y0 = 0,x1 = 20,y1 = 0, col = alpha("black", 1), lty = 3)
+points(Z, res_step, pch = 16, col = "paleturquoise2")
+axis(1)
+axis(2) 
+mtext("index", side = 1, line = 2)
+mtext("residuals", side = 2, line = 2)
+
+# Close EPS device
+dev.off()  
+```
+
+
+
+```{r}
+# specify export file name
+fig_name <- "InverseResiduals_largegrid_linear"
+# fig_name <- "JACCARD_FWER_preANM"
+
+# Specify export folder
+project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+figure_folder <- "writing/figures/"
+figure_dir <- paste(project_folder,figure_folder, sep = "" )
+
+# Open EPS device
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+           width = 5, height = 4, horizontal = FALSE)
+
+# Reduce space around plots and remove the box around the plot
+par(mar = c(3, 3, 0.1, 0.1), bty = "n")
+plot(Z, res_lin, xlab = "n", type = "n", ylab = "n", axes = FALSE)
+segments(x0 = 0,y0 = 0,x1 = 20,y1 = 0, col = alpha("black", 1), lty = 3)
+points(Z, res_lin, pch = 16, col = "orange")
+axis(1)
+axis(2) 
+mtext("index", side = 1, line = 2)
+mtext("residuals", side = 2, line = 2)
+
+# Close EPS device
+dev.off()  
+```
+
+
+```{r}
+# specify export file name
+fig_name <- "InverseResiduals_largegrid_spline"
+# fig_name <- "JACCARD_FWER_preANM"
+
+# Specify export folder
+project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+figure_folder <- "writing/figures/"
+figure_dir <- paste(project_folder,figure_folder, sep = "" )
+
+# Open EPS device
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+           width = 5, height = 4, horizontal = FALSE)
+
+# Reduce space around plots and remove the box around the plot
+par(mar = c(3, 3, 0.1, 0.1), bty = "n")
+plot(Z, res_spline, xlab = "n", type = "n", ylab = "n", axes = FALSE)
+segments(x0 = 0,y0 = 0,x1 = 20,y1 = 0, col = alpha("black", 1), lty = 3)
+points(Z, res_spline, pch = 16, col = "magenta")
+axis(1)
+axis(2) 
+mtext("index", side = 1, line = 2)
+mtext("residuals", side = 2, line = 2)
+
+# Close EPS device
+dev.off()  
+```
+
+
+
+
+
+
+```{r}
+# specify export file name
+fig_name <- "InverseMethods"
+# fig_name <- "JACCARD_FWER_preANM"
+
+# Specify export folder
+project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+figure_folder <- "writing/figures/"
+figure_dir <- paste(project_folder,figure_folder, sep = "" )
+
+# Open EPS device
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+           width = 5, height = 4, horizontal = FALSE)
+
+# Reduce space around plots and remove the box around the plot
+par(mar = c(3, 3, 0.1, 0.1), bty = "n")
+
+plot(Ymon, Zmon, pch = 16, type = "n", xlab = "n", ylab = "n", axes = FALSE)
+lines(Y_values, X_values_linear, col = "orange", lty = 2, lwd = 2)
+lines(Y_values, X_values_stepwise, col = "paleturquoise2", lty = 1, lwd = 2)
+lines(Y_values, X_values_spline, col = "magenta", lty = 3, lwd = 2)
+points(Ymon, Zmon, pch = 16)
+legend("topleft", 
+       legend = c("Linear", "Stepwise", "Spline"), 
+       col = c("orange", "paleturquoise2", "magenta"), 
+       lty = c(2, 1, 3),  
+       bty = "n")
+
+axis(1)
+axis(2, at = seq(-8,8,by=4))
+
+mtext("predicted", side = 1, line = 2)
+mtext("index", side = 2, line = 2)
+# Close EPS device
+dev.off()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# SIMULATIONS ------------------------------------------------------------------
+
+
+
+```{r}
+coef_doc_title <- "SIE_init_coefficients"
+SimRep <- 30
+
+# Set up parallel computing
+cluster <- makeSOCKcluster(3)
+registerDoSNOW(cluster)
+
+# setting up progress bar
+pb <- txtProgressBar(max=SimRep, style=3)
+progress <- function(n) setTxtProgressBar(pb, n)
+opts <- list(progress=progress)
+
+# Starting parallel processing unit
+foreach(rep = 1:SimRep,
+        .errorhandling = 'pass',
+        .combine=rbind,
+        .options.snow = opts ) %dopar% { # for(rep in 1:SimRep)
+          
+  # loading all packages into cores
+  load_packages(packages)
+  # loading source files into cores
+  load_files(files, folders, directory) 
+
+  # Setting up framework for error message printing
+  tryCatch(
+  # Start Computations
+    {
+      
+  # loading all packages into cores
+  load_packages(packages)
+  # loading source files into cores
+  load_files(files, folders, directory) 
+  
+  # simulate data
+  n <- 10000
+  
+  for (func in c("softplus", "square", "cubic", "log")) {
+
+    X_1 <- rnorm(n, sd = 5)
+    X_2 <- rnorm(n, sd = 5)
+    X_3 <- rnorm(n, sd = 5)
+    X_4 <- rnorm(n, sd = 5)
+    X_5 <- rnorm(n, sd = 5)
+    X_6 <- rnorm(n, sd = 5)
+    
+    if (func=="square") {
+      X_1 <- abs(X_1)
+      X_2 <- abs(X_2)
+      X_3 <- abs(X_3)
+      X_4 <- abs(X_4)
+      X_5 <- abs(X_5)
+      X_6 <- abs(X_6)
+    }
+    
+    Xdata <- cbind(X_1, X_2, X_3, X_4, X_5, X_6)
+    
+    beta <- c(3,0,-2,0.5,5,0)
+    beta_true <- beta/norm(beta, type = "2")
+    names(beta_true) <- paste("betatrue", 1:6,sep = "_")
+    
+    Z <- beta[1]*X_1 + beta[2]*X_2 + beta[3]*X_3 + beta[4]*X_4 + beta[5]*X_5 + beta[6]*X_6
+    Y <- f(x = Z + rnorm(n, mean = 0,sd = 3), id = func) 
+    
+    # Sliced Inverse Regression
+    method <- "SIR"
+    beta_hat <- init_beta(Xdata, Y, init_method = method)$beta_init
+    if (beta_hat[1]<0) beta_hat <- beta_hat*(-1)
+    names(beta_hat) <- paste("betahat", 1:6,sep = "_")
+    l2dist <- round( sqrt(sum((beta_true - beta_hat)^2))*100 , 4)
+    output <- c(func = func, n = n, method = method, round(beta_true, 3), 
+                    beta_hat, rep = rep, eucledian = l2dist)
+    
+    # linear regression
+    method <- "linear"
+    beta_hat <- init_beta(Xdata, Y, init_method = method)$beta_init
+    if (beta_hat[1]<0) beta_hat <- beta_hat*(-1)
+    names(beta_hat) <- paste("betahat", 1:6,sep = "_")
+    l2dist <- round( sqrt(sum((beta_true - beta_hat)^2))*100 , 4)
+    output <- rbind(output, 
+                    c(func = func, n = n, method = method, round(beta_true, 3), 
+                    beta_hat, rep = rep, eucledian = l2dist))
+    
+    # quantile prediction engression 
+    method <- "gaussian_quantile"
+    beta_hat <- init_beta(Xdata, Y, init_method = method)$beta_init
+    if (beta_hat[1]<0) beta_hat <- beta_hat*(-1)
+    names(beta_hat) <- paste("betahat", 1:6,sep = "_")
+    l2dist <- round( sqrt(sum((beta_true - beta_hat)^2))*100 , 4)
+    output <- rbind(output, 
+                    c(func = func, n = n, method = method, round(beta_true, 3), 
+                    beta_hat, rep = rep, eucledian = l2dist))
+    
+    record_stats( output, title = paste(coef_doc_title, func, sep = "_") )
+  }
+
+  # end computations and start error report 
+    }, error = function(e) {
+
+      # printing error if occurred
+      record_stats( c(method, func, conditionMessage(e)),
+               title =  paste("ErrorReport_SIE_init", sep = "_") )
+    }
+  # ending tryCatch
+  ) 
+# ending parallel processing 
+}
+close(pb)
+stopCluster(cluster)
+```
+
+
+
+```{r}
+betadf <- read.csv("SIE_init_coefficients_log.csv", 
+                         header = TRUE, sep = ";", encoding="UTF-8")
+
+betadf <- betadf[(betadf$method %in% c("SIR", "linear", "gaussian_quantile")),]
+
+
+numeric_cols <- !(colnames(betadf)%in% c("method", "func"))
+betadf[,numeric_cols] <- betadf[,numeric_cols] %>%
+  mutate_all(~ as.numeric(as.character(.)))
+
+betadf <- na.omit(betadf)
+
+results <- matrix(NA,15,4)
+colnames(results) <- c("n", "method", "mean", "sd")
+i <- 0
+for (n in unique(betadf$n)) {
+  for (method in unique(betadf$method)) {
+    i<-i+1
+    results[i,1] <- n
+    results[i,2] <- method
+    results[i,3] <- mean(betadf$eucledian[(betadf$n==n) & (betadf$method==method)], na.rm = TRUE)
+    results[i,4] <- sd(betadf$eucledian[(betadf$n==n) & (betadf$method==method)], na.rm = TRUE)
+  }
+}
+
+results <- as.data.frame(results)
+results$mean <- as.numeric(results$mean)
+results$sd <- as.numeric(results$sd)
+index_vec <- rep(1:5, each = 3) + rep(c(-0.1, 0, 0.1), 5)
+```
+
+
+```{r}
+# specify export file name
+fig_name <- "Beta_Eucledian_4"
+# fig_name <- "JACCARD_FWER_preANM"
+
+# Specify export folder
+project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+figure_folder <- "writing/figures/"
+figure_dir <- paste(project_folder,figure_folder, sep = "" )
+
+# Open EPS device
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+           width = 5, height = 5, horizontal = FALSE)  
+
+# Reduce space around plots and remove the box around the plot
+par(mar = c(3, 3, 0.1, 0.1), bty = "n")
+
+plot(1, xlim = range(index_vec),  ylim = range(results$mean-2*results$sd, results$mean+2*results$sd), 
+     axes = FALSE, type = "n", xlab ="", ylab ="")
+
+methods <- unique(betadf$method)
+lty <- c(3,5,1)
+for (j in 1:length(methods)) {
+  method <- methods[j]
+  method_indices <- which(results$method == method)
+  lines(index_vec[method_indices], results$mean[method_indices], col = "magenta", lty = lty[j], lwd = 1)
+}
+
+arrows(x0 = index_vec, x1 = index_vec, 
+       y0 = results$mean - 1.96 * results$sd, y1 = results$mean + 1.96 * results$sd, 
+       code = 3, angle = 90, lwd = 1, col = "pink", length = 0.05)
+points(index_vec,results$mean, pch = 16, col = "magenta")
+
+axis(1, at = 1:5, labels = unique(betadf$n))
+axis(2)
+
+mtext("sample size", side = 1, line = 2)
+mtext("eucledian distance", side = 2, line = 2)
+
+# Add a legend
+legend("topright", legend = c("SIR", "LM", "GQP"), col = "magenta", 
+       lty = lty, lwd = 2, title = "Methods", bty = "n")
+# Close EPS device
+dev.off()  
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ------------------------------------------------------------------------------
+# OLD CODE 
+# ------------------------------------------------------------------------------
+
+# ------------------------------------------------------------------------------
+# Causal Singele Index Engression
+
+```{r}
+# df for Pareto distribution
+k <- 4
+beta <- c(3,0.5)
+
+# define causal link function
+
+# g <- function(x){
+#   n <- length(x)
+#   return( ( x )^3/100 ) #+ rnorm(n, sd = 1)
+# }
+
+# g <- function(x){
+#   n <- length(x)
+#   return( abs(x)^2/100 ) #  rpareto(n, k = k, xmin = 1)
+# }
+
+g <- function(x){
+  n <- length(x)
+  return( log(1+exp( x )) ) # + rnorm(n, sd = 2)
+}
+
+# define interventional distribution
+intervention <- function(n){return(  rnorm(n, sd = 2)  )} #  rpareto(n, k = k, xmin = 1)
+
+# set sample size
+n <- 10^3
+
+
+# Simulate data from DAG 
+# DAG: W -> X -> Y -> Z 
+
+# no intervention
+E <- 1 
+W <- rpareto(n, k = k, xmin = 1) #  intervention(n)
+X <- rpareto(n, k = k, xmin = 1) #  intervention(n)
+# W <- intervention(n) 
+# X <- intervention(n) 
+Y <- g(beta[1]*X + beta[2]*W + rnorm(n, sd = 2))
+Z <- g(Y + rnorm(n, sd = 2))
+
+train_data <- cbind(W, X, Y, Z, rep(E,n))
+colnames(train_data) <- c("W", "X", "Y", "Z", "E")
+
+# intervention on X: E -> X -> Y -> Z 
+E <- 2
+W <- rpareto(n, k = k, xmin = 1) #  intervention(n)
+X <- intervention(n)
+# W <- intervention(n) 
+# X <- intervention(n) 
+Y <- g(beta[1]*X + beta[2]*W + rnorm(n, sd = 2))
+Z <- g(Y + rnorm(n, sd = 2))
+
+data <- cbind(W, X, Y, Z, rep(E,n))
+colnames(data) <- c("W", "X", "Y", "Z", "E")
+train_data <- rbind(train_data, data)
+
+# intervention on Z: W -> X -> Y, E -> Z 
+E <- 3
+W <- rpareto(n, k = k, xmin = 1) #  intervention(n)
+X <- rpareto(n, k = k, xmin = 1) #  intervention(n)
+# W <- intervention(n) 
+# X <- intervention(n) 
+Y <- g(beta[1]*X + beta[2]*W + rnorm(n, sd = 2))
+Z <- intervention(n)
+
+data <- cbind(W, X, Y, Z, rep(E,n))
+colnames(data) <- c("W", "X", "Y", "Z", "E")
+train_data <- rbind(train_data, data)
+
+# save as data frame 
+train_data <- as.data.frame(train_data)
+```
+
+```{r}
+quantile_90 <- quantile(train_data$Y, 0.9)
+
+# Subset the data
+train_data <- train_data[train_data$Y >= quantile_90, ]
+```
+
+
+
+
+
+
+```{r}
+plot(train_data[,"W"],train_data[,"Y"],col = train_data[,"E"])
+plot(train_data[,"X"],train_data[,"Y"],col = train_data[,"E"])
+plot(train_data[,"Z"],train_data[,"Y"],col = train_data[,"E"])
+plot( beta[1]*train_data[,"X"] + beta[2]*train_data[,"W"] + 0*train_data[,"Z"] ,
+      train_data[,"Y"],col = train_data[,"E"])
+```
+
+
+
+```{r}
+# initialize beta_hat uniformly 
+var_no <- 3
+beta_init <- rep(1/var_no,var_no)
+beta_init_norm <- beta_init/norm(beta_init, type = "2")
+z_hat <- as.matrix( train_data[,c("X","W","Z")] ) %*% as.vector( beta_init_norm )
+
+plot(z_hat, train_data[,"Y"],col = train_data[,"E"])
+```
+
+
+
+```{r}
+quantiles <- seq(0.01,0.99,by = 0.01)
+# initialize beta_hat via quantile prediction at 0 
+engfit <- gaussianengression( X = as.matrix (train_data[,c("X","W","Z")]), #  rep(0,length(train_data[,"Y"])), 
+                              Y = as.matrix( train_data[,"Y"] ), noise_dim = 0, hidden_dim = 100,
+                      num_layer = 3, dropout = 0.05, batch_norm = TRUE,
+                      num_epochs = 100, lr = 10^(-3), beta = 1, silent = TRUE,
+                      standardize = TRUE)
+
+qantile_hat <- predict(engfit, matrix(0,nrow = 1,ncol = 3),  type="quantile", quantiles= quantiles )
+plot(qnorm(quantiles), qantile_hat)
+```
+
+```{r}
+apply_inverse <- estimate_inverse(quantiles, qantile_hat)
+
+# y_test <- seq(min(Yhat), max(Yhat), length.out = 10^3)
+# z_estimated <- inv_func(y_test)
+# quantile_estimated <- apply_inverse(quantiles)
+# 
+# 
+# plot(qantile_hat, quantiles)
+# points(qantile_hat, quantile_estimated, col = "red", type = "l")
+
+y_inv0 <- apply_inverse(train_data[,"Y"])
+
+plot(train_data[,"W"],y_inv)
+plot(train_data[,"X"],y_inv)
+plot(train_data[,"Z"],y_inv)
+```
+
+```{r}
+lmfit0 <- lm(y_inv0 ~ X + W + Z, data = train_data)
+lmfit0$coefficients
+beta_hat0 <- lmfit0$coefficients[-1]
+cat("true beta:", beta, "\n- with eucledian norm 1:", beta/norm(beta, type = "2"), "\n")
+cat("estimated beta:", beta_hat0, "\n- with eucledian norm 1:", beta_hat0/norm(beta_hat0, type = "2"), "\n")
+z_hat0 <- lmfit0$fitted.values
+plot(z_hat0, train_data[,"Y"])
+```
+
+
+
+```{r}
+GSIeng <- GSIengression(X = as.matrix(train_data[,c("X","W")]), Y = as.matrix( train_data[,"Y"] ), 
+              noise_dim = 0, hidden_dim = 100, num_layer = 3, dropout = 0.05, 
+              batch_norm = TRUE, num_epochs = 120, lr = 1e-3, beta = 1, 
+              silent = TRUE, standardize = TRUE, init_beta = c(2,1))
+b <- GSIeng$beta_hat
+b/norm(b, type = "2")
+
+```
+
+
+```{r}
+# InvariantConditionalQuantilePrediction
+InvariantConditionalQuantilePrediction(
+    Y = train_data[,"Y"],
+    E = as.factor(train_data[,"E"]),
+    X = rep(0,length(train_data[,"Y"])), # z_hat,
+    fitmodel = "engression", # manually added to enable engression
+    alpha = 0.05,
+    verbose = FALSE,
+    test = fishersTestExceedance,
+    mtry = sqrt(NCOL(z_hat)),
+    ntree = 100,
+    nodesize = 5,
+    maxnodes = NULL,
+    quantiles = c(0.1, 0.5, 0.9), # seq(0.05,0.95,0.05),
+    returnModel = FALSE,
+    noise_dim = 5, # engression specifications
+    hidden_dim = 100,
+    num_layer = 3,
+    dropout = 0.05,
+    batch_norm = TRUE,
+    num_epochs = 100,
+    lr = 10^(-3),
+    beta = 1,
+    silent = TRUE,
+    standardize = TRUE )$pvalue
+```
+
+```{r}
+# z_hat <- seq(min(z_hat), max(z_hat), length.out = length(z_hat))
+
+engfit <- gaussianengression( X = z_hat, #  rep(0,length(train_data[,"Y"])), 
+                              Y = train_data[,"Y"], noise_dim = 0, hidden_dim = 100,
+                      num_layer = 3, dropout = 0.05, batch_norm = TRUE,
+                      num_epochs = 100, lr = 10^(-3), beta = 1, silent = TRUE,
+                      standardize = TRUE) #, single_index=TRUE, gaus_noise=FALSE)
+
+Yhat <- predict(engfit, z_hat)
+
+plot(z_hat, Yhat)
+```
+
+
+
+```{r}
+
+# Create spline function for the original data
+# inv_func <- splinefun(Yhat, z_hat, method = "monoH.FC")
+apply_inverse <- estimate_inverse(z_hat, Yhat)
+
+y_test <- seq(min(Yhat), max(Yhat), length.out = 10^3)
+# z_estimated <- inv_func(y_test)
+z_estimated <- apply_inverse(y_test)
+
+
+plot(Yhat, z_hat)
+points(y_test, z_estimated, col = "red", type = "l")
+```
+
+
+```{r}
+# y_inv <- inv_func(y)
+y_inv <- apply_inverse(train_data[,"Y"])
+
+plot(train_data[,"W"],y_inv)
+plot(train_data[,"X"],y_inv)
+plot(train_data[,"Z"],y_inv)
+plot(z_hat,y_inv)
+```
+
+
+```{r}
+lmfit <- lm(y_inv ~ X + W + Z, data = train_data)
+lmfit$coefficients
+beta_hat <- lmfit$coefficients[-1]
+cat("true beta:", beta, "\n- with eucledian norm 1:", beta/norm(beta, type = "2"), "\n")
+cat("estimated beta:", beta_hat, "\n- with eucledian norm 1:", beta_hat/norm(beta_hat, type = "2"), "\n")
+z_hat <- lmfit$fitted.values
+plot(z_hat, train_data[,"Y"])
+```
+
+
+```{r}
+lm(y_inv ~ X + W + Z, data = train_data)$coefficients
+lm(y_inv ~ X + W , data = train_data)$coefficients
+lm(y_inv ~ W , data = train_data)$coefficients
+lm(y_inv ~ X, data = train_data)$coefficients
+lm(y_inv ~ Z, data = train_data)$coefficients
+```
+
+```{r}
+ICPouput <- ICP(X = as.matrix( train_data[,c("Z","X","W")] ), 
+    Y = y_inv, ExpInd = train_data[,"E"], alpha=0.05)
+ICPouput$acceptedSets
+# ICPouput$colnames
+```
+
+```{r}
+lmfit <- lm(y_inv ~ X + W, data = train_data)
+beta_hat <- lmfit$coefficients[-1]
+cat("true beta:", beta, "\n- with eucledian norm 1:", beta/norm(beta, type = "2"), "\n")
+cat("estimated beta:", beta_hat, "\n- with eucledian norm 1:", beta_hat/norm(beta_hat, type = "2"), "\n")
+```
+
+```{r}
+beta_hat_norm <- beta_hat/norm(beta_hat, type = "2")
+z_hat <- as.matrix( train_data[,c("X","W")] ) %*% as.vector( beta_hat_norm )
+# z_hat <- lmfit$fitted.values
+plot(z_hat, train_data[,"Y"])
+```
+
+
+# ------------------------------------------------------------------------------
+# Alternative Inverse Computation Algorithm 
+
+
+```{r}
+
+
+
+# Load necessary library
+library(stats)
+
+estimate_inverse <- function(x_data, y_data) {
+  # Ensure data is sorted
+  sorted_indices <- order(y_data)
+  x_data_sorted <- x_data[sorted_indices]
+  y_data_sorted <- y_data[sorted_indices]
+  
+  # Generalized inverse function using linear interpolation
+  apply_inverse <- function(y_values) {
+    # Use approx to perform linear interpolation for the entire vector
+    approx(y_data_sorted, x_data_sorted, xout=y_values)$y
+  }
+  
+  # Return the invert function
+  return(apply_inverse)
+}
+
+```
+
+
+
+
+

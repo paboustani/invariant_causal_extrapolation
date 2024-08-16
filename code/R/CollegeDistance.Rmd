@@ -1,0 +1,412 @@
+---
+title: "College Distance"
+author: "Philip Boustani"
+date: "2024-07-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+
+```{r}
+# List of required packages
+packages <- c(
+  # "haven",
+  # "stats19",
+  # "AER", 
+  # "mboost", 
+  # "caret",
+  # "dplyr",
+  # "data.table",
+  # "openxlsx", 
+  # "tidyr", 
+  # "plotrix", 
+  # "glmnet"
+  "AER", 
+  "caret", 
+  "torch", 
+  "engression"
+)
+
+# First, installing packages which are not yet installed and then loading all of them
+load_packages <- function(packages){
+  for (pkg in packages) {
+    if(!require(pkg, character.only = TRUE)){
+      install.packages(pkg, character.only = TRUE);
+      library(pkg, character.only = TRUE)
+    }
+  }
+}
+
+# loading packages
+load_packages(packages)
+```
+
+
+```{r}
+# List of required source files
+files <- c(
+)
+
+# if applicable, specify entire folders to be loaded
+folders <- c(
+  "gaussianEngression",
+  "engression_supplementary",
+  "external_modified"
+  # "singleindexengression"
+)
+
+# Detect working directory and load all files 
+load_files <- function(files, folders, directory){
+  
+  paths <- c(
+    file.path(directory, files),
+    file.path(directory, list.files(folders, full.names = TRUE))
+  )
+  
+  for (path in paths) {
+    source(path)
+  }
+}
+
+# loading directory  
+directory <- getwd()
+load_files(files, folders, directory)
+```
+
+
+
+
+
+# ------------------------------------------------------------------------------
+# College Distance
+# ------------------------------------------------------------------------------
+
+
+```{r}
+data("CollegeDistance")
+```
+
+
+
+```{r}
+df <- CollegeDistance
+cat_vars <- sapply(df, is.factor) | sapply(df, is.character)
+dummies <- dummyVars(~ ., data = df, sep = "_")
+CollegeDistance_df <- predict(dummies, newdata = df)
+
+CollegeDistance_df <- as.data.frame(CollegeDistance_df)
+
+CollegeDistance_df$BA <- as.numeric(CollegeDistance_df$education >= 16)
+CollegeDistance_df$E <- as.numeric(CollegeDistance_df$distance >= 1)
+attributes(CollegeDistance_df)$names
+```
+
+
+```{r}
+vars <- c("gender_male", "ethnicity_other", "ethnicity_afam", "score", "fcollege_no",
+  "mcollege_no", "home_no", "urban_no", "unemp", "wage", "tuition", "income_low", 
+  "region_other")
+
+vars <- vars[1:10]
+```
+
+
+```{r}
+CollegeDistance_df_filtered <- CollegeDistance_df[, (names(CollegeDistance_df) 
+                                                     %in% c(vars, "BA", "E"))]
+names(CollegeDistance_df_filtered)
+S_sets <- obtain_S("BA",0,vars)
+```
+
+# RECORD Coefficients
+
+```{r}
+for (k in 1:length(S_sets)) {
+  cat("\n Computing set:", k)
+      
+  S_k <- S_sets[[k]]
+  Xinput <- as.matrix(CollegeDistance_df_filtered[,S_k])
+  colnames(Xinput) <- S_k
+  
+  result <- InvariantConditionalQuantilePrediction(
+                  Y = CollegeDistance_df_filtered$BA,
+                  E = as.factor(CollegeDistance_df_filtered$E),
+                  X = Xinput,
+                  fitmodel = "SIengressionQPT", # also: RF, engression, SIengressionQPT
+                  alpha = 0.05,
+                  verbose = FALSE,
+                  test = fishersTestExceedance,
+                  mtry = sqrt(NCOL(Xinput)),
+                  ntree = 100,
+                  nodesize = 5,
+                  maxnodes = NULL,
+                  quantiles = c(0.1, 0.5, 0.9),
+                  returnModel = FALSE, 
+                  noise_dim = 5, # engression specifications
+                  hidden_dim = 100,
+                  num_layer = 3,
+                  dropout = 0.05,
+                  batch_norm = TRUE,
+                  num_epochs = 100,
+                  lr = 10^(-3),
+                  beta = 1,
+                  silent = TRUE,
+                  standardize = TRUE,
+                  var_names = vars)
+  
+  pval <- round( result$pvalue, 3)
+  
+  record_stats(c(set = k, pvalue = round(pval,4), result$beta_hat, result$sd_hat),
+             title = paste("CollegeDistance", "BetaDoc", sep = "_") )
+}
+```
+
+
+# RECORD Predictions
+
+```{r}
+delim = ";"
+beta_data <- read.csv("CollegeDistance_BetaDoc.csv", header = TRUE, sep = delim, encoding="UTF-8")
+```
+
+```{r}
+accepted_sets <- which(beta_data$pvalue >= 0.01)
+S_accepted <- S_sets[accepted_sets]
+```
+
+
+```{r}
+for (k in 1:length(S_accepted)) {
+  cat("\n Computing set:", k)
+      
+  S_k <- S_accepted[[k]]
+  Xinput <- as.matrix(CollegeDistance_df_filtered[,S_k])
+  colnames(Xinput) <- S_k
+  
+  result <- SIE(X = Xinput,
+                Y = CollegeDistance_df_filtered$BA,
+                noise_dim = 5,
+                hidden_dim = 100,
+                num_layer = 3,
+                dropout = 0.05,
+                batch_norm = TRUE,
+                num_epochs = 100,
+                lr = 10^(-3),
+                beta = 1,
+                silent = TRUE,
+                standardize = TRUE,
+                GSI_rep = 1, 
+                quantiles = c(0.05,0.95), 
+                return_index = TRUE, 
+                predict_from_index = seq(-1.5,1.5, by=0.01),
+                mean_prediction = FALSE, 
+                test_data = NULL,
+                verbose = FALSE,
+                icp_test = NULL,
+                E = NULL, 
+                shapiro = FALSE,
+                init_method = "gaussian_quantile", 
+                return_yinv = FALSE, 
+                monotone = FALSE)
+  
+  ui <- result$predicted_from_index[,2]
+  li <- result$predicted_from_index[,1]
+  
+  record_stats(c(set = k, uihat = ui),
+             title = paste("CollegeDistance", "prediction", "ui", sep = "_") )
+  record_stats(c(set = k, lihat = li),
+             title = paste("CollegeDistance", "prediction", "li", sep = "_") )
+}
+```
+
+
+```{r}
+# Plot the initial results
+plot(seq(-1.5, 1.5, by = 0.01), result$predicted_from_index[,2], 
+     xlim = c(-5,5),
+     ylim = range(result$predicted_from_index))
+points(seq(-1.5, 1.5, by = 0.01), result$predicted_from_index[,1], col = "blue")
+
+curve(1 / (1 + exp(-x)), add = TRUE, col = "green", lty = 2, lwd = 2)
+
+```
+
+
+
+```{r}
+index_range <- seq(-1.5,1.5, by=0.01)
+
+li_data <- read.csv("CollegeDistance_prediction_li.csv", header = TRUE, sep = ";", encoding="UTF-8")
+li_data <- li_data[,-1]
+li_means <- colMeans(li_data)
+li_mins <- apply(li_data, 2, min)
+li_mins <- (li_mins + mean(CollegeDistance_df_filtered$BA)) * sd(CollegeDistance_df_filtered$BA)
+
+ui_data <- read.csv("CollegeDistance_prediction_li.csv", header = TRUE, sep = ";", encoding="UTF-8")
+ui_data <- ui_data[,-1]
+ui_means <- colMeans(ui_data)
+ui_max <- apply(ui_data, 2, max) 
+ui_max <- (ui_max + mean(CollegeDistance_df_filtered$BA)) * sd(CollegeDistance_df_filtered$BA)
+```
+
+
+```{r}
+
+
+# specify export file name
+fig_name <- "CollegeDistance_predictions"
+# fig_name <- "JACCARD_FWER_preANM"
+
+# Specify export folder
+project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+figure_folder <- "writing/figures/"
+figure_dir <- paste(project_folder,figure_folder, sep = "" )
+
+# Open EPS device
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+           width = 5, height = 4, horizontal = FALSE)
+
+par(mar = c(3, 3, 0.1, 0.1), bty = "n")
+
+plot(index_range, li_mins, 
+     xlim= c(-1.3,1.3), ylim= c(-0.4,1.3),
+     type = "n", ylab = "n", axes = FALSE)
+# points(index_range, ui_max)
+
+
+polygon(x = c(rev(index_range), index_range), 
+        y = c(rev(ui_max), li_mins), 
+        col = "plum1", 
+        border = "plum4",   # Border color (e.g., "black")
+        lwd = 2,            # Border width (e.g., 2)
+        lty = 1     # Border line type (e.g., "dashed")
+)
+
+segments(x0 = -1.5,y0 = 0,x1 = 1.5,y1 = 0, col = alpha("black", 1), lty = 3)
+segments(x0 = -1.5,y0 = 1,x1 = 1.5,y1 = 1, col = alpha("black", 1), lty = 3)
+
+curve(1 / (1 + exp(-x)), add = TRUE, col = "palegreen4", lty = 2, lwd = 2)
+
+legend("top", 
+       legend = c("90% CI", "logistic function"), 
+       col = c("plum1", "palegreen4"), 
+       lty = c(1, 2),  
+       lwd = c(7, 2),  
+       bty = "n", cex = 0.9, horiz = TRUE)
+
+# points(Z, res_step, pch = 16, col = "paleturquoise2")
+axis(1, at =  round(seq(-1.2,1.2, by=0.2),1))
+axis(2, at =  seq(-0.4,1.2, by=0.2))
+mtext("index", side = 1, line = 2)
+mtext("predicted", side = 2, line = 2)
+
+# Close EPS device
+dev.off()
+```
+
+
+
+
+
+# EVALUTATION: Evaluate the Coefficients ---------------------------------------
+
+```{r}
+delim = ";"
+beta_data <- read.csv("CollegeDistance_BetaDoc.csv", header = TRUE, sep = delim, encoding="UTF-8")
+```
+
+
+```{r}
+for (k in 1:length(S_sets)) {
+      
+  S_k <- S_sets[[k]]
+  var_selec <- !(vars %in% S_k)
+  ind_vec <- c(FALSE, FALSE, var_selec, var_selec)
+  beta_data[k, ind_vec] <- NA
+}
+
+range(beta_data$beta_score[beta_data$pvalue >= 0.01], na.rm = TRUE)
+
+range(beta_data$beta_fcollege_no[beta_data$pvalue >= 0.01], na.rm = TRUE)
+```
+
+```{r}
+# specify export file name
+fig_name <- "CollegeDistance_betas"
+
+# Specify export folder
+project_folder <- "D:/PAB/Nextcloud/PA/06_UNIGE/master_thesis/icp-engression/"
+figure_folder <- "writing/figures/"
+figure_dir <- paste(project_folder,figure_folder, sep = "" )
+
+# Open EPS device
+postscript(paste(figure_dir, fig_name, ".eps", sep = ""),
+          width = 6, height = 4, horizontal = FALSE)
+
+# cairo_ps(paste(figure_dir, fig_name, ".eps", sep = ""),
+#            width = 6, height = 3, onefile = FALSE, fallback_resolution = 1000)
+
+
+# Calculate the range of x and y
+x_range <- range(-0.5, 10.5) # range(0, 0.3) 
+y_range <- range(-1, 0.5)
+
+# Reduce space around plots
+par(mar = c(7, 4, 0.1, 0.1)) # default: par(mar = c(5.1, 4.1, 4.1, 2.1))   
+
+# Create empty plot 
+plot(x = x_range, y = y_range, xlim = x_range, ylim = y_range, type = "n", 
+     xlab = "", ylab = "", xaxt = "n", yaxt = "n", bty = "n", ann = FALSE)
+
+# Add axes
+axis(1, at = 1:length(vars), labels = vars, las = 2, srt=45)
+axis(2, at = seq(-1, 0.5, by = 0.5))
+
+
+segments(x0 = x_range[1],y0 = 0,x1 = x_range[2],y1 = 0, 
+         col = alpha("black", 1), lty = 3)
+
+n_beta <- sum(beta_data$pvalue >= 0.01)
+index_var <- 0
+
+for (ivar in vars) {
+  index_var <- index_var + 1
+  index_length <- 0.2
+  index_range <- c(index_var-index_length,index_var+index_length)
+  index_value <- runif(n_beta, min = index_range[1], max = index_range[2])
+  
+  var_beta <- paste0("beta_",ivar)
+  var_beta_data <- beta_data[[var_beta]]
+  
+  var_sd <- paste0("sd_",ivar)
+  var_sd_data <- beta_data[[var_sd]]
+  
+  x <- index_value
+  y <- var_beta_data[beta_data$pvalue >= 0.01]
+  
+  y_li <- y - 1.96 * var_sd_data[beta_data$pvalue >= 0.01]
+  y_ui <- y + 1.96 * var_sd_data[beta_data$pvalue >= 0.01]
+  
+  z_li <- min(y_li, na.rm = TRUE)
+  z_ui <- max(y_ui, na.rm = TRUE)
+  index_z <- index_var + index_length + 0.1
+    
+  segments(x0 = x,y0 = y_li,x1 = x,y1 = y_ui, col = alpha("pink", 1))
+  points(x,y, col = alpha("magenta", 1), pch = 16, cex = 0.5)
+  arrows(x0 = index_z, x1 = index_z, y0 = z_li, y1 = z_ui, code = 3, 
+         angle = 90, lwd = 2, col = "darkgreen", length = 0.05)
+}
+
+# Close EPS device
+dev.off()  
+```
+
+
+
+
+
